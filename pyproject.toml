@@ -1,0 +1,14 @@
+[project]
+name = "ai-agent-edu-team"
+version = "0.1.0"
+description = "AI commerce operations dashboard built with Streamlit"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "openai>=2.0",
+    "pandas>=2.2",
+    "plotly>=6.0",
+    "python-dotenv>=1.1",
+    "streamlit>=1.45",
+]

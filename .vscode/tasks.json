@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Dashboard: Install dependencies",
+      "type": "shell",
+      "command": "uv sync",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Dashboard: Run Streamlit",
+      "type": "shell",
+      "command": "uv run streamlit run main.py --server.address 127.0.0.1 --server.port 8501",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Dashboard: Syntax check",
+      "type": "shell",
+      "command": "uv run python -m py_compile main.py dashboard.py src/*.py",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
