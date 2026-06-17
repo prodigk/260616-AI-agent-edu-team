@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.role_agents import AUTO_AGENT
+from src.role_agents import AUTO_AGENT, PRODUCT_LEAD_AGENT
 
 
 @dataclass(frozen=True)
@@ -46,13 +46,7 @@ def select_workflow_pattern(question: str, target_agents: list[str]) -> Workflow
     """
     normalized = question.casefold()
     explicit_agents = [agent for agent in target_agents if agent != AUTO_AGENT]
-
-    if len(explicit_agents) > 1:
-        return WorkflowPattern(
-            workflow_type="Parallelization",
-            reason="여러 담당 에이전트를 독립 관점으로 실행해 답변을 나눠 생성했습니다.",
-            implementation_note="선택된 담당별 답변을 순차 렌더링하지만, 논리적으로는 독립 작업을 병합하는 병렬화 패턴입니다.",
-        )
+    has_product_lead = PRODUCT_LEAD_AGENT in explicit_agents
 
     if target_agents == [AUTO_AGENT]:
         return WorkflowPattern(
@@ -69,6 +63,12 @@ def select_workflow_pattern(question: str, target_agents: list[str]) -> Workflow
         )
 
     if any(keyword in normalized for keyword in ORCHESTRATOR_KEYWORDS):
+        if has_product_lead:
+            return WorkflowPattern(
+                workflow_type="Orchestrator · Synthesizer",
+                reason="질문을 여러 운영 관점으로 나눠 본 뒤 제품총괄이 최종 의사결정 관점으로 합성합니다.",
+                implementation_note="현재 구현은 사전 정의된 담당 답변을 제품총괄이 종합하는 경량 Orchestrator-Synthesizer 흐름입니다.",
+            )
         return WorkflowPattern(
             workflow_type="별도 패턴: Orchestration intent detected",
             reason="질문에는 동적 작업 분해 의도가 있지만 현재 앱은 사전 정의된 대시보드 컨텍스트만 사용합니다.",
@@ -76,10 +76,30 @@ def select_workflow_pattern(question: str, target_agents: list[str]) -> Workflow
         )
 
     if any(keyword in normalized for keyword in EVALUATOR_KEYWORDS):
+        if has_product_lead:
+            return WorkflowPattern(
+                workflow_type="Evaluator-optimizer · LLM Call Evaluator",
+                reason="제품총괄이 담당 답변의 근거, 누락, 실행 가능성을 평가해 더 품질 높은 최종 답변을 만듭니다.",
+                implementation_note="제품총괄 답변에 담당별 초안을 평가 대상으로 전달합니다.",
+            )
         return WorkflowPattern(
             workflow_type="별도 패턴: Evaluator-optimizer",
             reason="평가나 개선 루프가 필요한 표현이 있지만 현재 앱은 평가-개선 반복을 실행하지 않습니다.",
             implementation_note="사용자가 지정한 5개 패턴 밖의 Anthropic 추가 패턴입니다.",
+        )
+
+    if has_product_lead:
+        return WorkflowPattern(
+            workflow_type="Parallelization · Aggregator",
+            reason="담당 답변을 만든 뒤 제품총괄이 중복과 충돌을 정리해 최종 답변으로 종합합니다.",
+            implementation_note="담당별 답변을 독립 생성한 뒤 제품총괄 답변에 참고 자료로 전달합니다.",
+        )
+
+    if len(explicit_agents) > 1:
+        return WorkflowPattern(
+            workflow_type="Parallelization",
+            reason="여러 담당 에이전트를 독립 관점으로 실행해 답변을 나눠 생성했습니다.",
+            implementation_note="선택된 담당별 답변을 순차 렌더링하지만, 논리적으로는 독립 작업을 병합하는 병렬화 패턴입니다.",
         )
 
     return WorkflowPattern(

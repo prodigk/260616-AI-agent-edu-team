@@ -52,3 +52,8 @@ class CorrelationResult:
     matrix: pd.DataFrame
     top_pairs: pd.DataFrame
     daily_metrics: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class CauseAnalysisResult:
+    candidates: pd.DataFrame

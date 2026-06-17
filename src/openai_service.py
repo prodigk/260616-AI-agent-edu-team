@@ -36,6 +36,7 @@ def build_dashboard_context(
     events: pd.DataFrame,
     correlations: CorrelationResult,
     actions: pd.DataFrame,
+    cause_candidates: pd.DataFrame,
     start: pd.Timestamp,
     end: pd.Timestamp,
     role: str,
@@ -64,6 +65,19 @@ def build_dashboard_context(
         "direction",
         "sample_size",
     ]
+    cause_fields = [
+        "event_date",
+        "event_type",
+        "target",
+        "related_metric",
+        "correlation",
+        "direction",
+        "related_metric_change",
+        "hypothesis",
+        "confidence",
+        "recommended_action",
+        "caution",
+    ]
 
     prioritized_events = _prioritize(
         events, "domain", set(assignment.agent.domains)
@@ -76,13 +90,13 @@ def build_dashboard_context(
     correlation_records = _records(
         correlations.top_pairs.head(10), correlation_fields
     )
+    cause_records = _records(cause_candidates.head(10), cause_fields)
 
     return {
         "analysis_period": {
             "start": start.strftime("%Y-%m-%d"),
             "end": end.strftime("%Y-%m-%d"),
         },
-        "selected_role": role,
         "answer_agent": {
             "name": assignment.agent.label,
             "assignment_mode": assignment.mode,
@@ -101,12 +115,40 @@ def build_dashboard_context(
         },
         "top_events": event_records,
         "top_correlations": correlation_records,
+        "cause_candidates": cause_records,
         "priority_actions": action_records,
         "data_note": (
             "ROAS values are percentages. Correlation does not establish causation. "
+            "Cause candidates are hypotheses, not confirmed root causes. "
             "Only aggregated dashboard context is included."
         ),
     }
+
+
+def polish_report_with_openai(report_markdown: str) -> str:
+    if not is_openai_configured():
+        raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다.")
+    client = OpenAI(timeout=25.0, max_retries=1)
+    response = client.responses.create(
+        model=configured_model(),
+        instructions=(
+            "당신은 한국어 커머스 운영 리포트 에디터입니다. 제공된 Markdown 리포트를 "
+            "더 자연스러운 내러티브로 다듬되, 숫자·이벤트·액션을 바꾸거나 새 사실을 "
+            "추가하지 마세요. '확인된 데이터'와 'AI 해석/가설'을 구분하고, "
+            "상관관계는 인과관계가 아니라는 주의 문구를 유지하세요."
+        ),
+        input=[
+            {
+                "role": "user",
+                "content": "다음 리포트를 Markdown 형식으로 다듬어 주세요:\n\n"
+                + report_markdown,
+            }
+        ],
+    )
+    text = response.output_text.strip()
+    if not text:
+        raise RuntimeError("OpenAI API가 빈 리포트를 반환했습니다.")
+    return text
 
 
 def ask_openai(
@@ -186,7 +228,11 @@ def _instructions(assignment: AgentAssignment) -> str:
         f"당신은 AI 커머스 운영 조직의 '{assignment.agent.label}'입니다. "
         f"{assignment.agent.instructions} 제공된 대시보드 컨텍스트만 "
         "근거로 답하세요. 먼저 결론을 말하고, 근거가 있으면 KPI·이벤트·상관계수·"
-        "액션을 구체적으로 인용하세요. 상관관계를 인과관계로 단정하지 마세요. "
+        "원인 후보·액션을 구체적으로 인용하세요. 원인 분석 질문에는 가능하면 "
+        "'확인된 사실', '가능한 가설', '추가 확인 필요 데이터', '추천 액션'으로 "
+        "나눠 답하세요. 상관관계를 인과관계로 단정하지 마세요. "
+        "컨텍스트에 source_agent_answers가 있으면 제품총괄처럼 담당별 답변을 평가하고 "
+        "중복·충돌·누락을 정리한 최종 종합 답변을 작성하세요. "
         "담당팀과 다음 행동이 명확한 경우 짧은 실행 제안으로 마무리하세요. "
         "컨텍스트에 없는 수치나 사실을 만들지 말고, 확인할 수 없으면 그렇게 말하세요. "
         "답변은 읽기 쉬운 3~8문장 또는 짧은 불릿으로 작성하세요."

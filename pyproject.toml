@@ -11,4 +11,5 @@ dependencies = [
     "plotly>=6.0",
     "python-dotenv>=1.1",
     "streamlit>=1.45",
+    "watchdog>=6.0.0",
 ]

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+import io
+import shutil
 import time
 from html import escape
 from pathlib import Path
@@ -12,6 +15,7 @@ import streamlit as st
 
 from src.agents import (
     ActionPlannerAgent,
+    CauseAnalyzerAgent,
     CorrelationAnalyzerAgent,
     DataLoaderAgent,
     EventDetectorAgent,
@@ -26,10 +30,12 @@ from src.openai_service import (
     build_dashboard_context,
     configured_model,
     is_openai_configured,
+    polish_report_with_openai,
     stream_openai_text,
 )
 from src.role_agents import (
     AUTO_AGENT,
+    PRODUCT_LEAD_AGENT,
     ROLE_AGENT_BY_LABEL,
     assign_role_agent,
 )
@@ -38,6 +44,7 @@ from src.workflow_patterns import select_workflow_pattern
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "db"
+CHAT_LOG_PATH = ROOT / "chat.txt"
 
 COLORS = {
     "blue": "#0062FF",
@@ -62,47 +69,100 @@ AGENT_COLORS = {
     "재고관리 담당": COLORS["red"],
     "매출 상품 담당": COLORS["blue"],
     "제품 기획 담당": COLORS["purple"],
+    PRODUCT_LEAD_AGENT: COLORS["orange"],
 }
 
 PAGES = (
     {
         "key": "home",
-        "label": "Home",
+        "label": "종합 현황",
         "subtitle": "커머스 운영 전체 현황",
-        "icon": ":material/home:",
+        "icon": ":material/dashboard:",
     },
     {
         "key": "events",
-        "label": "Events",
+        "label": "이벤트 탐지",
         "subtitle": "매출·재고·마케팅 이벤트 탐지",
-        "icon": ":material/chat_bubble:",
+        "icon": ":material/notifications_active:",
     },
     {
         "key": "analytics",
-        "label": "Analytics",
+        "label": "상관 분석",
         "subtitle": "지표 간 상관 분석",
-        "icon": ":material/analytics:",
+        "icon": ":material/query_stats:",
     },
     {
         "key": "tasks",
-        "label": "Tasks",
+        "label": "실행 과제",
         "subtitle": "우선순위 액션 보드",
-        "icon": ":material/checklist:",
+        "icon": ":material/task_alt:",
     },
     {
         "key": "agents",
-        "label": "Agents",
+        "label": "AI 에이전트",
         "subtitle": "분석 에이전트 실행 상태",
         "icon": ":material/hub:",
     },
     {
+        "key": "data_sources",
+        "label": "데이터 소스",
+        "subtitle": "연결된 CSV 데이터 카탈로그",
+        "icon": ":material/database:",
+    },
+    {
         "key": "reports",
-        "label": "Reports",
+        "label": "리포트",
         "subtitle": "주간·대표 보고서",
         "icon": ":material/article:",
     },
 )
 PAGE_BY_KEY = {page["key"]: page for page in PAGES}
+
+DATA_SOURCE_DEFINITIONS = (
+    {
+        "attr": "sales",
+        "file": "sales_data.csv",
+        "domain": "매출·상품",
+        "description": "일자·상품·채널 기준 판매량과 매출 흐름을 분석하는 핵심 거래 데이터입니다.",
+    },
+    {
+        "attr": "products",
+        "file": "product_data.csv",
+        "domain": "매출·상품",
+        "description": "상품명, 카테고리, 가격 등 상품 마스터 정보를 연결하는 기준 데이터입니다.",
+    },
+    {
+        "attr": "marketing",
+        "file": "marketing_data.csv",
+        "domain": "마케팅",
+        "description": "캠페인별 광고비, 클릭, 전환, ROAS 변화를 추적하는 퍼포먼스 데이터입니다.",
+    },
+    {
+        "attr": "customers",
+        "file": "customer_data.csv",
+        "domain": "고객·CS",
+        "description": "고객 유입, 구매, 세그먼트 흐름을 파악하는 고객 행동 데이터입니다.",
+    },
+    {
+        "attr": "reviews",
+        "file": "review_cs_data.csv",
+        "domain": "고객·CS",
+        "description": "리뷰, 평점, 문의·불만 신호를 고객 경험 관점에서 확인하는 데이터입니다.",
+    },
+    {
+        "attr": "inventory",
+        "file": "inventory_data.csv",
+        "domain": "재고·추천",
+        "description": "상품별 현재 재고, 안전재고, 품절 위험을 계산하는 운영 데이터입니다.",
+    },
+    {
+        "attr": "recommendations",
+        "file": "recommendation_log.csv",
+        "domain": "재고·추천",
+        "description": "추천 노출, 클릭, 전환 로그를 통해 추천 성과를 분석하는 데이터입니다.",
+    },
+)
+DATA_SOURCE_BY_FILE = {source["file"]: source for source in DATA_SOURCE_DEFINITIONS}
 
 METRIC_LABELS = {
     "quantity_sold": "판매량",
@@ -147,32 +207,56 @@ def inject_square_theme() -> None:
             padding: 1.7rem 2rem 3rem;
         }
         [data-testid="stSidebar"] {
-            background: #F7F7F8;
+            background: #F7F7F9;
             border-right: 1px solid var(--sq-border);
             box-shadow:none;
-        }
-        [data-testid="stSidebar"] > div:first-child { padding:1.45rem .9rem 1rem; }
-        .sq-brand {
-            display:flex;align-items:center;justify-content:space-between;
-            padding:2px 8px 20px;color:#2F2F31;
-            font-family:Poppins,sans-serif;font-size:22px;font-weight:600;
-            letter-spacing:-.03em;
-        }
-        .sq-brand-switch {
-            color:#8E8E93;font-size:17px;font-weight:600;letter-spacing:-.08em;
-        }
-        [data-testid="stSidebar"] {
             text-align:left;
+        }
+        [data-testid="stSidebarHeader"] {
+            height:2rem !important;
+            min-height:2rem !important;
+            padding-top:0 !important;
+            padding-bottom:0 !important;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            min-height:100vh;
+            display:flex;
+            flex-direction:column;
+            padding:.25rem .85rem 1rem;
+        }
+        .sq-brand {
+            display:grid;grid-template-columns:40px 1fr;align-items:center;gap:11px;
+            padding:0 8px 16px;color:#2F2F31;
+        }
+        .sq-brand-mark {
+            width:38px;height:38px;border-radius:12px;
+            display:flex;align-items:center;justify-content:center;
+            background:linear-gradient(135deg, #0062FF 0%, #3DD598 100%);
+            color:#fff;font-family:Poppins,sans-serif;font-size:15px;font-weight:800;
+            box-shadow:0 10px 20px rgba(0,98,255,.18);
+        }
+        .sq-brand-copy {display:flex;flex-direction:column;gap:1px;min-width:0;}
+        .sq-brand-name {
+            font-family:Poppins,"Noto Sans KR",sans-serif;
+            font-size:22px;font-weight:800;letter-spacing:0;color:#171725;line-height:1.05;
+        }
+        .sq-brand-sub {
+            color:#92929D;font-size:11px;font-weight:800;letter-spacing:.08em;
+            text-transform:uppercase;line-height:1.2;
+        }
+        .sq-nav-section-label {
+            color:#B5B5BE;font-size:10px;font-weight:800;letter-spacing:.12em;
+            text-transform:uppercase;padding:30px 10px 6px;
         }
         [data-testid="stSidebar"] .stButton {
             margin-bottom:2px;
         }
         [data-testid="stSidebar"] .stButton > button {
-            justify-content:flex-start !important;gap:11px !important;
+            justify-content:flex-start !important;gap:9px !important;
             text-align:left !important;
-            width:100% !important;min-height:42px !important;padding:8px 11px !important;
-            border:0 !important;border-radius:14px !important;background:transparent !important;
-            color:#303033 !important;font-size:16px !important;font-weight:500 !important;
+            width:100% !important;min-height:40px !important;padding:7px 11px !important;
+            border:1px solid transparent !important;border-radius:11px !important;background:transparent !important;
+            color:#44444F !important;font-size:14px !important;font-weight:800 !important;
             box-shadow:none !important;
         }
         [data-testid="stSidebar"] .stButton > button p,
@@ -182,9 +266,64 @@ def inject_square_theme() -> None:
         }
         [data-testid="stSidebar"] .stButton > button:hover {
             background:#EFEFF1 !important;color:#171719 !important;
+            border-color:#EAEAEE !important;
         }
         [data-testid="stSidebar"] .stButton > button [data-testid="stIconMaterial"] {
-            font-size:23px !important;color:#303033 !important;
+            font-size:20px !important;color:#44444F !important;
+        }
+        .st-key-sidebar_filters {
+            margin-top:auto;
+            padding:28px 9px 9px;
+            border-top:0;
+            border-radius:16px;
+            background:linear-gradient(180deg, rgba(255,255,255,.82), rgba(255,255,255,.62));
+            box-shadow:0 10px 24px rgba(68,68,79,.035);
+        }
+        .sq-filter-heading {
+            display:flex;align-items:flex-end;justify-content:space-between;gap:8px;
+            margin:0 0 7px;
+        }
+        .sq-filter-heading strong {
+            color:#171725;font-size:12px;font-weight:800;line-height:1.2;
+        }
+        .sq-filter-heading span {
+            color:#B5B5BE;font-size:10px;font-weight:800;letter-spacing:.12em;
+            text-transform:uppercase;
+        }
+        .st-key-sidebar_filters label {
+            color:#696974 !important;
+            font-size:11px !important;
+            font-weight:800 !important;
+        }
+        .st-key-sidebar_filters [data-testid="stDateInput"],
+        .st-key-sidebar_filters [data-testid="stSelectbox"] {
+            margin-bottom:4px;
+        }
+        .st-key-sidebar_filters [data-baseweb="input"],
+        .st-key-sidebar_filters [data-baseweb="select"] > div {
+            border-color:#E2E2EA !important;
+            background:#fff !important;
+            border-radius:10px !important;
+            min-height:37px !important;
+        }
+        .st-key-sidebar_filters [data-baseweb="input"] input {
+            font-size:12px !important;
+            padding-left:8px !important;
+            padding-right:6px !important;
+        }
+        .sq-filter-caption {
+            color:#92929D;font-size:10px;font-weight:600;margin-top:4px;
+        }
+        .sq-period-summary {
+            margin:3px 0 7px;padding:7px 9px;border-radius:10px;
+            background:rgba(0,98,255,.055);border:1px solid rgba(0,98,255,.12);
+        }
+        .sq-period-summary span {
+            display:block;color:#0062FF;font-size:10px;font-weight:800;
+            letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px;
+        }
+        .sq-period-summary strong {
+            display:block;color:#171725;font-size:11px;font-weight:800;line-height:1.3;
         }
         .sq-eyebrow {
             color:var(--sq-gray); font-size:11px; font-weight:700;
@@ -216,6 +355,55 @@ def inject_square_theme() -> None:
         .sq-delta-down {color:var(--sq-red);font-weight:700;}
         .sq-risk-value {color:var(--sq-red);}
         .sq-blue-value {color:var(--sq-blue);}
+        .sq-source-list {
+            display:grid;gap:10px;margin:8px 0 24px;
+        }
+        .sq-source-row {
+            display:grid;grid-template-columns:minmax(0, 1fr) auto;gap:14px;
+            align-items:center;background:#fff;border:1px solid rgba(226,226,234,.78);
+            border-radius:16px;padding:15px 16px;
+            box-shadow:0 8px 24px rgba(68,68,79,.035);
+        }
+        .sq-source-file {
+            font-family:Poppins,"Noto Sans KR",sans-serif;
+            font-size:15px;font-weight:800;color:#171725;margin-bottom:5px;
+        }
+        .sq-source-desc {
+            color:#696974;font-size:12px;line-height:1.5;margin-bottom:8px;
+        }
+        .sq-source-columns {
+            color:#92929D;font-size:11px;line-height:1.45;
+        }
+        .sq-source-domain {
+            display:inline-flex;align-items:center;padding:3px 8px;border-radius:99px;
+            background:rgba(0,98,255,.07);color:#0062FF;
+            font-size:10px;font-weight:800;margin-bottom:7px;
+        }
+        .sq-source-meta {
+            display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;
+            max-width:260px;
+        }
+        .sq-source-pill {
+            display:inline-flex;align-items:center;gap:4px;padding:5px 8px;
+            border-radius:999px;background:#FAFAFB;border:1px solid #F1F1F5;
+            color:#44444F;font-size:11px;font-weight:800;white-space:nowrap;
+        }
+        .sq-source-pill-ok {
+            background:rgba(61,213,152,.11);border-color:rgba(61,213,152,.2);
+            color:#15966a;
+        }
+        .st-key-data_source_page {
+            max-width:100%;
+            overflow-x:hidden;
+        }
+        .st-key-data_source_page [data-testid="stExpander"] {
+            background:#fff;border:1px solid rgba(226,226,234,.78);
+            border-radius:14px;box-shadow:0 8px 24px rgba(68,68,79,.03);
+            overflow:hidden;
+        }
+        .st-key-data_source_page [data-testid="stExpander"] summary {
+            font-weight:800;color:#171725;
+        }
         .sq-chat-header {
             display:flex;align-items:center;justify-content:space-between;
             padding-bottom:14px;border-bottom:1px solid #F1F1F5;margin-bottom:12px;
@@ -229,7 +417,7 @@ def inject_square_theme() -> None:
         .sq-status:before {content:"";width:7px;height:7px;border-radius:50%;background:#3DD598;}
         .sq-context {
             border-radius:10px;background:rgba(0,98,255,.055);color:#0062FF;
-            padding:8px 10px;font-size:11px;font-weight:600;margin-bottom:10px;
+            padding:8px 10px;font-size:11px;font-weight:600;margin-bottom:8px;
         }
         .st-key-chat_panel_shell {
             position:fixed;top:1rem;right:2rem;bottom:1rem;
@@ -298,12 +486,42 @@ def inject_square_theme() -> None:
         }
         .stTabs [data-baseweb="tab-list"] {
             gap:7px;background:#fff;border-radius:14px;padding:5px;
-            border:1px solid var(--sq-border);
+            border:0;
+            margin-bottom:16px;
+            box-shadow:none;
         }
         .stTabs [data-baseweb="tab"] {
             border-radius:10px;padding:8px 15px;font-weight:700;
         }
         .stTabs [aria-selected="true"] {background:rgba(0,98,255,.08);color:var(--sq-blue);}
+        .stTabs [role="tablist"],
+        .stTabs [data-baseweb="tab-list"],
+        .stTabs [role="tablist"] > div {
+            border:0 !important;
+            border-bottom:0 !important;
+            box-shadow:none !important;
+            outline:0 !important;
+        }
+        .stTabs [role="tablist"]::before,
+        .stTabs [role="tablist"]::after,
+        .stTabs [data-baseweb="tab-list"]::before,
+        .stTabs [data-baseweb="tab-list"]::after {
+            content:none !important;
+            display:none !important;
+            border:0 !important;
+            box-shadow:none !important;
+        }
+        .stTabs [data-baseweb="tab-border"],
+        .stTabs [data-baseweb="tab-highlight"] {
+            display:none !important;
+            height:0 !important;
+            opacity:0 !important;
+            border:0 !important;
+            box-shadow:none !important;
+        }
+        .stTabs [data-baseweb="tab-panel"] {
+            padding-top:2px;
+        }
         .stButton > button, .stDownloadButton > button,
         [data-testid="stBaseButton-secondary"] {
             border-radius:10px;border:1px solid var(--sq-border);
@@ -340,6 +558,22 @@ def inject_square_theme() -> None:
         .sq-workflow-meta strong {
             color:#44444F;font-weight:700;
         }
+        .sq-answer-skeleton {
+            padding:8px 0 4px;
+        }
+        .sq-skeleton-line {
+            height:10px;border-radius:99px;margin:8px 0;
+            background:linear-gradient(90deg,#ECECF1 0%,#F8F8FA 45%,#ECECF1 90%);
+            background-size:220% 100%;
+            animation:sqSkeleton 1.15s ease-in-out infinite;
+        }
+        .sq-skeleton-line:nth-child(1) {width:92%;}
+        .sq-skeleton-line:nth-child(2) {width:78%;}
+        .sq-skeleton-line:nth-child(3) {width:58%;}
+        @keyframes sqSkeleton {
+            0% {background-position:100% 0;}
+            100% {background-position:-100% 0;}
+        }
         .sq-target-label {
             font-size:11px;font-weight:700;color:#696974;margin:0 0 6px;
         }
@@ -364,6 +598,37 @@ def inject_square_theme() -> None:
         }
         .sq-agent-picker-summary {
             margin-bottom:4px;color:#696974;font-size:11px;font-weight:600;
+        }
+        .sq-agent-mode-card {
+            border:1px solid #EAEAEE;background:#fff;border-radius:12px;
+            padding:10px 11px;margin-bottom:8px;
+        }
+        .sq-agent-mode-top {
+            display:flex;align-items:center;justify-content:space-between;gap:8px;
+            margin-bottom:7px;
+        }
+        .sq-agent-mode-title {
+            color:#171725;font-size:13px;font-weight:800;line-height:1.25;
+        }
+        .sq-mode-badge {
+            flex:0 0 auto;border-radius:99px;padding:3px 7px;
+            background:rgba(255,151,74,.12);color:#B95711;
+            font-size:9px;font-weight:800;letter-spacing:.03em;
+        }
+        .sq-agent-mode-hint {
+            color:#696974;font-size:11px;line-height:1.35;margin-bottom:8px;
+        }
+        .sq-agent-shortcuts {
+            display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:8px;
+        }
+        .st-key-agent_shortcut_auto button,
+        .st-key-agent_shortcut_lead button {
+            min-height:32px !important;border-radius:10px !important;
+            font-size:11px !important;padding:5px 8px !important;
+        }
+        .st-key-agent_shortcut_lead button {
+            border-color:rgba(255,151,74,.38) !important;
+            color:#B95711 !important;background:#FFF8F2 !important;
         }
         .st-key-chat_agent_selector [data-testid="stPills"] {
             margin-bottom:0;gap:5px;
@@ -395,6 +660,9 @@ def inject_square_theme() -> None:
         .st-key-chat_agent_selector [data-testid="stPills"] button:nth-of-type(5):before {
             background:var(--sq-purple);
         }
+        .st-key-chat_agent_selector [data-testid="stPills"] button:nth-of-type(6):before {
+            background:var(--sq-orange);
+        }
         .st-key-chat_agent_selector [data-testid="stPopover"] button {
             min-height:32px !important;padding:5px 10px !important;
             border-radius:12px !important;font-size:11px !important;
@@ -418,6 +686,17 @@ def inject_square_theme() -> None:
                 width:250px !important;
                 transform:none !important;
             }
+            [data-testid="stSidebar"] > div:first-child {
+                padding-bottom:230px;
+            }
+            .st-key-sidebar_filters {
+                position:fixed;
+                left:.85rem;
+                bottom:1rem;
+                width:calc(250px - 1.7rem);
+                margin-top:0;
+                z-index:30;
+            }
             [data-testid="stSidebarCollapseButton"],
             [data-testid="stExpandSidebarButton"] {
                 display:none !important;
@@ -426,6 +705,8 @@ def inject_square_theme() -> None:
         @media (max-width: 1100px) {
             .block-container {padding:1rem;}
             .sq-card {min-height:112px;}
+            .sq-source-row {grid-template-columns:1fr;}
+            .sq-source-meta {justify-content:flex-start;max-width:none;}
             .st-key-chat_panel_shell {
                 position:static;width:auto;height:auto !important;
                 min-height:0;max-height:none;
@@ -487,9 +768,10 @@ def run_analysis(start_date, end_date, method, role):
     start, end = pd.Timestamp(start_date), pd.Timestamp(end_date)
     events = EventDetectorAgent().run(bundle, start, end)
     correlations = CorrelationAnalyzerAgent().run(bundle, start, end, method)
+    cause_candidates = CauseAnalyzerAgent().run(events, correlations).candidates
     insights = InsightGeneratorAgent().run(events, correlations, role)
-    actions = ActionPlannerAgent().run(events, end)
-    return quality, events, correlations, insights, actions
+    actions = ActionPlannerAgent().run(events, end, cause_candidates)
+    return quality, events, correlations, insights, actions, cause_candidates
 
 
 def format_krw(value: float) -> str:
@@ -545,12 +827,83 @@ def base_layout(fig, height=330):
     return fig
 
 
+def format_change(value) -> str:
+    if value is None or pd.isna(value):
+        return "계산 불가"
+    return f"{float(value):+.1%}"
+
+
+def cause_candidates_view(cause_candidates: pd.DataFrame, limit=5) -> pd.DataFrame:
+    if cause_candidates.empty:
+        return pd.DataFrame()
+    view = cause_candidates.head(limit).copy()
+    view["날짜"] = view["event_date"]
+    view["이벤트"] = view["event_type"]
+    view["대상"] = view["target"]
+    view["관련 지표"] = view["related_metric"].map(
+        lambda value: METRIC_LABELS.get(value, value)
+    )
+    view["상관계수"] = view["correlation"].round(2)
+    view["전후 변화"] = view["related_metric_change"].map(format_change)
+    view["신뢰도"] = view["confidence"]
+    view["원인 후보"] = view["hypothesis"]
+    view["추천 액션"] = view["recommended_action"]
+    return view[
+        ["날짜", "이벤트", "대상", "관련 지표", "상관계수", "전후 변화", "신뢰도", "원인 후보", "추천 액션"]
+    ]
+
+
+def render_cause_candidates(cause_candidates: pd.DataFrame, limit=5) -> None:
+    st.markdown('<div class="sq-section-title">AI 원인 후보 분석</div>', unsafe_allow_html=True)
+    if cause_candidates.empty:
+        st.info("선택 기간에는 충분한 원인 후보를 계산할 수 없습니다.")
+        return
+    st.dataframe(
+        cause_candidates_view(cause_candidates, limit),
+        width="stretch",
+        hide_index=True,
+        column_config={"날짜": st.column_config.DateColumn("날짜", format="MM-DD")},
+    )
+    st.markdown(
+        '<div class="sq-note">원인 후보는 상관관계와 이벤트 전후 변화로 만든 검토 가설이며, 인과관계 확정이 아닙니다.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_role_recommendations(actions: pd.DataFrame) -> None:
+    st.markdown('<div class="sq-section-title">우선 권고 요약</div>', unsafe_allow_html=True)
+    if actions.empty:
+        st.info("현재 기간에 추천할 권고 액션이 없습니다.")
+        return
+    selected = actions.copy()
+    selected["priority_rank"] = selected["priority"].map({"High": 0, "Medium": 1, "Low": 2})
+    selected = selected.sort_values(["priority_rank", "due_date"], ascending=[True, True]).head(3)
+    for row in selected.itertuples():
+        reason = getattr(row, "recommendation_reason", "이벤트 기반 권고입니다.")
+        st.markdown(
+            f"""
+            <div class="sq-card" style="min-height:auto;margin-bottom:10px">
+              <div class="sq-card-label">{escape(row.team)} · {escape(row.priority)}</div>
+              <div style="font-weight:700;margin-bottom:6px">{escape(str(row.target))}</div>
+              <div class="sq-card-meta">{escape(str(row.instruction))}</div>
+              <div class="sq-card-meta">권고 사유: {escape(str(reason))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def render_sidebar_nav(current_page):
     active_css = "\n".join(
         (
             f'.st-key-nav_{page["key"]} button {{'
-            'background:#ECECEF !important;color:#171719 !important;'
-            'font-weight:600 !important;'
+            'background:#FFFFFF !important;color:#0062FF !important;'
+            'border-color:rgba(0,98,255,.16) !important;'
+            'box-shadow:inset 3px 0 0 #0062FF, 0 8px 18px rgba(0,98,255,.08) !important;'
+            'font-weight:800 !important;'
+            '}'
+            f'.st-key-nav_{page["key"]} button [data-testid="stIconMaterial"] {{'
+            'color:#0062FF !important;'
             '}'
         )
         for page in PAGES
@@ -568,7 +921,7 @@ def render_sidebar_nav(current_page):
             st.rerun()
 
 
-def render_header(start, end, role, page_meta):
+def render_header(start, end, page_meta):
     st.markdown('<div class="sq-eyebrow">AI COMMERCE OPERATIONS</div>', unsafe_allow_html=True)
     st.markdown(
         f'<h1 class="sq-page-title">{escape(page_meta["label"])}</h1>',
@@ -577,7 +930,7 @@ def render_header(start, end, role, page_meta):
     st.markdown(
         (
             f'<p class="sq-subtitle">{escape(page_meta["subtitle"])} · '
-            f'{start:%Y.%m.%d}–{end:%Y.%m.%d} · {role} 관점 · '
+            f'{start:%Y.%m.%d}–{end:%Y.%m.%d} · '
             '8개 분석 에이전트 가동</p>'
         ),
         unsafe_allow_html=True,
@@ -844,7 +1197,9 @@ def inventory_recommendation_tab(bundle, start, end, events):
     )
 
 
-def overview_page(bundle, start, end, kpis, deltas, events, correlations, insights):
+def overview_page(
+    bundle, start, end, kpis, deltas, events, correlations, insights, cause_candidates
+):
     render_kpis(bundle, kpis, deltas, events)
     st.write("")
     tabs = st.tabs(["매출·상품", "마케팅", "고객·CS", "재고·추천"])
@@ -885,6 +1240,185 @@ def overview_page(bundle, start, end, kpis, deltas, events, correlations, insigh
             '<div class="sq-note">상관관계는 인과관계를 뜻하지 않습니다. 프로모션·요일·계절성을 함께 확인하세요.</div>',
             unsafe_allow_html=True,
         )
+    st.write("")
+    render_cause_candidates(cause_candidates, limit=5)
+
+
+def format_file_size(bytes_value: int) -> str:
+    if bytes_value >= 1024 * 1024:
+        return f"{bytes_value / (1024 * 1024):.1f}MB"
+    if bytes_value >= 1024:
+        return f"{bytes_value / 1024:.1f}KB"
+    return f"{bytes_value}B"
+
+
+def validate_replacement_csv(current_frame: pd.DataFrame, new_frame: pd.DataFrame) -> list[str]:
+    errors = []
+    current_columns = list(map(str, current_frame.columns))
+    new_columns = list(map(str, new_frame.columns))
+    missing = [column for column in current_columns if column not in new_columns]
+    extra = [column for column in new_columns if column not in current_columns]
+    if missing:
+        errors.append(f"누락 컬럼: {', '.join(missing)}")
+    if extra:
+        errors.append(f"추가 컬럼: {', '.join(extra)}")
+    if not len(new_frame):
+        errors.append("CSV에 데이터 행이 없습니다.")
+    if "date" in new_frame.columns:
+        parsed_dates = pd.to_datetime(new_frame["date"], errors="coerce")
+        if parsed_dates.isna().any():
+            errors.append("date 컬럼에 변환할 수 없는 날짜가 있습니다.")
+    return errors
+
+
+def save_replacement_csv(data_dir: Path, filename: str, content: bytes) -> Path:
+    target = data_dir / filename
+    backup_dir = data_dir / "_backups"
+    backup_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"{target.stem}_{timestamp}{target.suffix}"
+    if target.exists():
+        shutil.copy2(target, backup_path)
+    target.write_bytes(content)
+    st.cache_data.clear()
+    return backup_path
+
+
+def render_data_update_panel(bundle) -> None:
+    st.markdown('<div class="sq-section-title">데이터 갱신</div>', unsafe_allow_html=True)
+    st.caption("기존 CSV와 컬럼 구성이 같을 때만 교체됩니다. 저장 전 현재 파일은 db/_backups에 백업됩니다.")
+    filenames = [source["file"] for source in DATA_SOURCE_DEFINITIONS]
+    selected_file = st.selectbox(
+        "갱신할 데이터",
+        filenames,
+        format_func=lambda file: f'{DATA_SOURCE_BY_FILE[file]["domain"]} · {file}',
+        key="data_update_target",
+    )
+    source = DATA_SOURCE_BY_FILE[selected_file]
+    current_frame = getattr(bundle, source["attr"])
+    upload_tab, url_tab = st.tabs(["파일 업로드", "URL 불러오기"])
+
+    with upload_tab:
+        uploaded_file = st.file_uploader(
+            "CSV 파일",
+            type=["csv"],
+            key=f"upload_{selected_file}",
+        )
+        if st.button("업로드 파일로 교체", key=f"save_upload_{selected_file}"):
+            if uploaded_file is None:
+                st.warning("교체할 CSV 파일을 먼저 선택하세요.")
+            else:
+                content = uploaded_file.getvalue()
+                try:
+                    new_frame = pd.read_csv(io.BytesIO(content))
+                    errors = validate_replacement_csv(current_frame, new_frame)
+                    if errors:
+                        st.error("스키마 확인이 필요합니다. " + " / ".join(errors))
+                    else:
+                        backup_path = save_replacement_csv(bundle.data_dir, selected_file, content)
+                        st.success(f"{selected_file} 갱신 완료. 백업: {backup_path.name}")
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"CSV를 읽지 못했습니다: {exc}")
+
+    with url_tab:
+        csv_url = st.text_input(
+            "CSV URL",
+            placeholder="https://example.com/data.csv",
+            key=f"url_{selected_file}",
+        )
+        if st.button("URL 데이터로 교체", key=f"save_url_{selected_file}"):
+            if not csv_url.strip():
+                st.warning("CSV URL을 입력하세요.")
+            else:
+                try:
+                    new_frame = pd.read_csv(csv_url.strip())
+                    errors = validate_replacement_csv(current_frame, new_frame)
+                    if errors:
+                        st.error("스키마 확인이 필요합니다. " + " / ".join(errors))
+                    else:
+                        csv_text = new_frame.to_csv(index=False).encode("utf-8")
+                        backup_path = save_replacement_csv(bundle.data_dir, selected_file, csv_text)
+                        st.success(f"{selected_file} 갱신 완료. 백업: {backup_path.name}")
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"URL CSV를 읽지 못했습니다: {exc}")
+
+
+def data_sources_page(bundle, quality):
+    with st.container(key="data_source_page"):
+        quality_by_file = quality.set_index("dataset").to_dict("index")
+        total_rows = int(quality["rows"].sum()) if not quality.empty else 0
+        total_nulls = int(quality["null_cells"].sum()) if not quality.empty else 0
+        normal_count = int((quality["status"] == "정상").sum()) if not quality.empty else 0
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("연결 파일", f"{len(DATA_SOURCE_DEFINITIONS)}개")
+        m2.metric("총 레코드", f"{total_rows:,}행")
+        m3.metric("정상 상태", f"{normal_count}/{len(DATA_SOURCE_DEFINITIONS)}개")
+
+        st.markdown(
+            '<div class="sq-note">데이터 소스는 로컬 CSV fixture 기준입니다. 원본 전체를 LLM에 보내지 않고, 집계 결과와 분석 근거만 대화 컨텍스트에 포함합니다.</div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        with st.expander("CSV 파일 또는 URL로 데이터 갱신", expanded=False):
+            render_data_update_panel(bundle)
+        st.write("")
+
+        domains = []
+        for source in DATA_SOURCE_DEFINITIONS:
+            if source["domain"] not in domains:
+                domains.append(source["domain"])
+
+        for domain in domains:
+            st.markdown(
+                f'<div class="sq-section-title">{escape(domain)}</div>',
+                unsafe_allow_html=True,
+            )
+            rows = []
+            for source in DATA_SOURCE_DEFINITIONS:
+                if source["domain"] != domain:
+                    continue
+                frame = getattr(bundle, source["attr"])
+                path = bundle.data_dir / source["file"]
+                stat = path.stat()
+                quality_row = quality_by_file.get(source["file"], {})
+                status = str(quality_row.get("status", "확인 필요"))
+                column_preview = ", ".join(map(str, frame.columns[:6]))
+                if len(frame.columns) > 6:
+                    column_preview += f" 외 {len(frame.columns) - 6}개"
+                modified_at = datetime.fromtimestamp(stat.st_mtime).strftime(
+                    "%Y.%m.%d %H:%M"
+                )
+                status_class = " sq-source-pill-ok" if status == "정상" else ""
+                rows.append(
+                    (
+                        '<div class="sq-source-row">'
+                        "<div>"
+                        f'<div class="sq-source-domain">{escape(source["domain"])}</div>'
+                        f'<div class="sq-source-file">{escape(source["file"])}</div>'
+                        f'<div class="sq-source-desc">{escape(source["description"])}</div>'
+                        f'<div class="sq-source-columns">컬럼: {escape(column_preview)}</div>'
+                        "</div>"
+                        '<div class="sq-source-meta">'
+                        f'<span class="sq-source-pill{status_class}">{escape(status)}</span>'
+                        f'<span class="sq-source-pill">{len(frame):,}행</span>'
+                        f'<span class="sq-source-pill">{len(frame.columns)}컬럼</span>'
+                        f'<span class="sq-source-pill">결측 {int(quality_row.get("null_cells", 0)):,}</span>'
+                        f'<span class="sq-source-pill">{format_file_size(stat.st_size)}</span>'
+                        f'<span class="sq-source-pill">{modified_at}</span>'
+                        "</div>"
+                        "</div>"
+                    )
+                )
+            st.markdown(
+                f'<div class="sq-source-list">{"".join(rows)}</div>',
+                unsafe_allow_html=True,
+            )
+
+        if total_nulls:
+            st.warning(f"일부 데이터에 결측값 {total_nulls:,}개가 있습니다. 분석 전 품질 상태를 확인하세요.")
 
 
 def events_page(events):
@@ -910,7 +1444,7 @@ def events_page(events):
     )
 
 
-def correlations_page(correlations, method):
+def correlations_page(correlations, method, cause_candidates):
     left, right = st.columns([1.25, 1])
     labels = [METRIC_LABELS.get(x, x) for x in correlations.matrix.columns]
     with left:
@@ -966,25 +1500,74 @@ def correlations_page(correlations, method):
     )
     fig.update_traces(marker=dict(size=10, opacity=.75, line=dict(width=1, color="white")))
     st.plotly_chart(base_layout(fig, 390), width="stretch", key="correlation_detail")
+    st.write("")
+    render_cause_candidates(cause_candidates, limit=12)
+    if not cause_candidates.empty:
+        labels_for_select = (
+            cause_candidates["event_date"].dt.strftime("%m-%d")
+            + " · "
+            + cause_candidates["event_type"]
+            + " · "
+            + cause_candidates["target"].astype(str)
+        )
+        selected_label = st.selectbox(
+            "이벤트별 원인 후보 상세",
+            labels_for_select.tolist(),
+            key="cause_candidate_select",
+        )
+        selected = cause_candidates.loc[labels_for_select == selected_label].iloc[0]
+        st.markdown(
+            f"""
+            <div class="sq-card" style="min-height:auto">
+              <div class="sq-card-label">확인된 사실</div>
+              <div>{escape(selected['target'])}의 {escape(selected['event_type'])} 이벤트가 감지됐고,
+              {escape(METRIC_LABELS.get(selected['related_metric'], selected['related_metric']))}와
+              상관계수 {selected['correlation']:.2f} 관계를 보입니다.</div>
+              <div class="sq-card-label" style="margin-top:14px">가능한 가설</div>
+              <div>{escape(selected['hypothesis'])}</div>
+              <div class="sq-card-label" style="margin-top:14px">추천 액션</div>
+              <div>{escape(selected['recommended_action'])}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def actions_page(actions, role, end):
     assigned = TaskAssignmentAgent().run(actions, role, end)
-    st.markdown('<div class="sq-section-title">역할별 액션 보드</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sq-section-title">실행 액션 보드</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     c1.metric("High", int((assigned["priority"] == "High").sum()) if not assigned.empty else 0)
     c2.metric("진행 전", int((assigned["status"] == "대기").sum()) if not assigned.empty else 0)
     c3.metric("마감 초과", int(assigned["overdue"].sum()) if not assigned.empty else 0)
     if assigned.empty:
-        st.info("현재 역할에 배정된 액션이 없습니다.")
+        st.info("현재 기간에 배정된 액션이 없습니다.")
         return
+    render_role_recommendations(assigned)
     edited = st.data_editor(
         assigned[
-            ["action_id", "team", "priority", "target", "due_date", "instruction", "status"]
+            [
+                "action_id",
+                "team",
+                "priority",
+                "target",
+                "due_date",
+                "instruction",
+                "recommendation_reason",
+                "status",
+            ]
         ],
         width="stretch",
         hide_index=True,
-        disabled=["action_id", "team", "priority", "target", "due_date", "instruction"],
+        disabled=[
+            "action_id",
+            "team",
+            "priority",
+            "target",
+            "due_date",
+            "instruction",
+            "recommendation_reason",
+        ],
         column_config={
             "action_id": "ID",
             "team": "담당팀",
@@ -992,6 +1575,7 @@ def actions_page(actions, role, end):
             "target": "대상",
             "due_date": st.column_config.DateColumn("마감일"),
             "instruction": "세부 지침",
+            "recommendation_reason": "권고 사유",
             "status": st.column_config.SelectboxColumn(
                 "상태", options=["대기", "진행중", "완료"], required=True
             ),
@@ -1014,7 +1598,7 @@ def agents_page(quality, events, correlations, insights, actions):
         ("Insight Generator Agent", f"{len(insights)}개 인사이트"),
         ("Weekly Report Agent", "리포트 생성 준비"),
         ("Action Planner Agent", f"{len(actions)}개 액션"),
-        ("Task Assignment Agent", "역할별 보드 연결"),
+        ("Task Assignment Agent", "액션 보드 연결"),
         ("Executive Report Agent", "대표 요약 생성 준비"),
     ]
     cols = st.columns(2)
@@ -1037,20 +1621,47 @@ def agents_page(quality, events, correlations, insights, actions):
     st.dataframe(quality, width="stretch", hide_index=True)
 
 
-def reports_page(kpis, events, correlations, insights, actions, start, end):
+def reports_page(kpis, events, correlations, insights, actions, cause_candidates, start, end):
     weekly = WeeklyReportAgent().run(
-        kpis, events, correlations, insights, start, end
+        kpis, events, correlations, insights, start, end, cause_candidates
     )
-    executive = ExecutiveReportAgent().run(kpis, events, actions, insights)
-    tab1, tab2 = st.tabs(["주간 리포트", "대표 보고서"])
+    executive = ExecutiveReportAgent().run(
+        kpis, events, actions, insights, cause_candidates
+    )
+    tab1, tab2, tab3 = st.tabs(["실무자 운영 리포트", "대표 요약 리포트", "AI 내러티브"])
     with tab1:
         st.markdown(weekly)
         st.download_button(
-            "주간 리포트 다운로드",
+            "실무자 운영 리포트 다운로드",
             weekly,
             file_name=f"weekly_report_{end:%Y%m%d}.md",
             mime="text/markdown",
             type="primary",
+        )
+    with tab3:
+        st.caption("OpenAI가 설정된 경우 deterministic 리포트를 더 자연스러운 한국어 내러티브로 다듬습니다.")
+        base_report = weekly + "\n\n---\n\n" + executive
+        if not is_openai_configured():
+            st.info("OpenAI API 키가 없어 기본 리포트를 사용합니다.")
+            st.markdown(base_report)
+        elif st.button("AI 내러티브 리포트 생성", type="primary", width="stretch"):
+            try:
+                polished = polish_report_with_openai(base_report)
+                st.session_state["polished_report"] = polished
+                st.session_state.pop("polished_report_error", None)
+            except Exception as exc:
+                st.session_state["polished_report_error"] = str(exc)
+                st.session_state["polished_report"] = base_report
+        if st.session_state.get("polished_report_error"):
+            st.warning("OpenAI 리포트 다듬기에 실패해 기본 리포트를 표시합니다.")
+            with st.expander("오류 상세"):
+                st.caption(st.session_state["polished_report_error"])
+        st.markdown(st.session_state.get("polished_report", base_report))
+        st.download_button(
+            "AI 내러티브 리포트 다운로드",
+            st.session_state.get("polished_report", base_report),
+            file_name=f"narrative_report_{end:%Y%m%d}.md",
+            mime="text/markdown",
         )
     with tab2:
         st.markdown(executive)
@@ -1069,6 +1680,145 @@ def get_answer_targets(requested_agents):
         agent for agent in requested_agents if agent in ROLE_AGENT_BY_LABEL
     ]
     return requested_agents or [AUTO_AGENT]
+
+
+def get_product_lead_worker_targets(target_agents):
+    explicit = [agent for agent in target_agents if agent != AUTO_AGENT]
+    if PRODUCT_LEAD_AGENT not in explicit:
+        return []
+    workers = [agent for agent in explicit if agent != PRODUCT_LEAD_AGENT]
+    if workers:
+        return workers
+    return [agent for agent in ROLE_AGENT_BY_LABEL if agent != PRODUCT_LEAD_AGENT]
+
+
+def generate_chat_answer(
+    question,
+    kpis,
+    events,
+    correlations,
+    actions,
+    cause_candidates,
+    start,
+    end,
+    role,
+    requested_agent,
+    workflow,
+    source_answers=None,
+):
+    assignment = assign_role_agent(question, requested_agent)
+    source = None
+    error = None
+    try:
+        if is_openai_configured():
+            context = build_dashboard_context(
+                kpis,
+                events,
+                correlations,
+                actions,
+                cause_candidates,
+                start,
+                end,
+                role,
+                assignment,
+            )
+            context["answer_workflow"] = {
+                "type": workflow.workflow_type,
+                "reason": workflow.reason,
+                "implementation_note": workflow.implementation_note,
+            }
+            if source_answers:
+                context["source_agent_answers"] = source_answers
+            response = "".join(
+                stream_openai_text(
+                    question,
+                    context,
+                    assignment,
+                    conversation=st.session_state.get("chat_messages", []),
+                )
+            )
+            if not response.strip():
+                raise RuntimeError("답변 텍스트가 비어 있습니다.")
+            return response, source, error, assignment
+        source = "규칙 기반"
+        response = answer_dashboard_question(
+            question,
+            kpis,
+            events,
+            correlations,
+            actions,
+            cause_candidates,
+            start,
+            end,
+            assignment,
+            source_answers=source_answers,
+        )
+        return response, source, error, assignment
+    except Exception as exc:
+        source = "규칙 기반 fallback"
+        error = str(exc)
+        response = answer_dashboard_question(
+            question,
+            kpis,
+            events,
+            correlations,
+            actions,
+            cause_candidates,
+            start,
+            end,
+            assignment,
+            source_answers=source_answers,
+        )
+        return response, source, error, assignment
+
+
+def source_answers_from_results(results):
+    answers = []
+    for response, source, _error, assignment in results:
+        answers.append(
+            {
+                "agent": assignment.agent.label,
+                "assignment_mode": assignment.mode,
+                "source": source or "OpenAI",
+                "content": response,
+            }
+        )
+    return answers
+
+
+def answer_mode_summary(selected_agents):
+    selected_agents = selected_agents or []
+    if not selected_agents:
+        return "자동 배정", "Routing", "질문 키워드로 가장 관련 있는 담당을 선택합니다."
+    if PRODUCT_LEAD_AGENT in selected_agents:
+        worker_count = len(get_product_lead_worker_targets(selected_agents))
+        return (
+            "제품총괄 종합",
+            "Aggregator",
+            f"{worker_count}개 담당 관점을 모아 최종 권고로 정리합니다.",
+        )
+    names = ", ".join(selected_agents[:2])
+    if len(selected_agents) > 2:
+        names += f" 외 {len(selected_agents) - 2}명"
+    return f"{len(selected_agents)}개 담당 직접", "Direct", names
+
+
+def render_agent_mode_card(selected_agents):
+    title, badge, hint = answer_mode_summary(selected_agents)
+    st.markdown(
+        f"""
+        <div class="sq-agent-mode-card">
+          <div class="sq-agent-mode-top">
+            <div class="sq-agent-mode-title">{escape(title)}</div>
+            <div class="sq-mode-badge">{escape(badge)}</div>
+          </div>
+          <div class="sq-agent-mode-hint">{escape(hint)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if selected_agents:
+        render_target_chips(selected_agents)
 
 
 def render_target_chips(labels):
@@ -1106,7 +1856,33 @@ def queue_chat_question(question, target_agents):
     st.session_state.chat_scroll_to_bottom = True
 
 
-def append_assistant_messages(answers, workflow):
+def append_chat_log(question, answers, workflow):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sections = [
+        "\n---",
+        f"기록 시각: {timestamp}",
+        f"질문: {question.strip()}",
+    ]
+    for index, (response, source, _error, assignment) in enumerate(answers, start=1):
+        source_label = source or "OpenAI"
+        sections.extend(
+            [
+                "",
+                f"답변 {index}. {assignment.agent.label}",
+                f"배정 방식: {assignment.mode}",
+                response.strip(),
+                f"배정 근거: {assignment.reason}",
+                f"답변 방식: {workflow.workflow_type}",
+                f"선택 이유: {workflow.reason}",
+                f"출처: {source_label}",
+            ]
+        )
+    CHAT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with CHAT_LOG_PATH.open("a", encoding="utf-8") as file:
+        file.write("\n".join(sections).rstrip() + "\n")
+
+
+def append_assistant_messages(answers, workflow, question=None):
     messages = []
     for response, source, _error, assignment in answers:
         messages.append(
@@ -1123,6 +1899,12 @@ def append_assistant_messages(answers, workflow):
             }
         )
     st.session_state.chat_messages.extend(messages)
+    if question:
+        try:
+            append_chat_log(question, answers, workflow)
+            st.session_state.pop("chat_log_error", None)
+        except OSError as exc:
+            st.session_state["chat_log_error"] = str(exc)
 
 
 def render_chat_message(message):
@@ -1187,17 +1969,32 @@ def stream_text_chunks(text, chunk_size=6, delay=0.012):
         time.sleep(delay)
 
 
+def render_answer_skeleton(placeholder) -> None:
+    placeholder.markdown(
+        """
+        <div class="sq-answer-skeleton" aria-label="답변 생성 중">
+          <div class="sq-skeleton-line"></div>
+          <div class="sq-skeleton-line"></div>
+          <div class="sq-skeleton-line"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_streaming_chat_answer(
     question,
     kpis,
     events,
     correlations,
     actions,
+    cause_candidates,
     start,
     end,
     role,
     requested_agent,
     workflow,
+    source_answers=None,
 ):
     assignment = assign_role_agent(question, requested_agent)
     source = None
@@ -1206,16 +2003,27 @@ def render_streaming_chat_answer(
     with st.chat_message("assistant", avatar=":material/auto_awesome:"):
         render_assistant_header(assignment.agent.label, assignment.mode)
         placeholder = st.empty()
+        render_answer_skeleton(placeholder)
         try:
             if is_openai_configured():
                 context = build_dashboard_context(
-                    kpis, events, correlations, actions, start, end, role, assignment
+                    kpis,
+                    events,
+                    correlations,
+                    actions,
+                    cause_candidates,
+                    start,
+                    end,
+                    role,
+                    assignment,
                 )
                 context["answer_workflow"] = {
                     "type": workflow.workflow_type,
                     "reason": workflow.reason,
                     "implementation_note": workflow.implementation_note,
                 }
+                if source_answers:
+                    context["source_agent_answers"] = source_answers
                 chunks = stream_openai_text(
                     question,
                     context,
@@ -1230,16 +2038,18 @@ def render_streaming_chat_answer(
                     events,
                     correlations,
                     actions,
+                    cause_candidates,
                     start,
                     end,
                     assignment,
+                    source_answers=source_answers,
                 )
                 chunks = stream_text_chunks(fallback)
 
             for chunk_index, chunk in enumerate(chunks):
                 collected += chunk
                 placeholder.markdown(collected + "▌")
-                if chunk_index % 4 == 0:
+                if chunk_index == 0 or chunk_index % 4 == 0:
                     scroll_chat_to_bottom()
             if not collected.strip():
                 raise RuntimeError("답변 텍스트가 비어 있습니다.")
@@ -1252,15 +2062,17 @@ def render_streaming_chat_answer(
                 events,
                 correlations,
                 actions,
+                cause_candidates,
                 start,
                 end,
                 assignment,
+                source_answers=source_answers,
             )
             collected = ""
             for chunk_index, chunk in enumerate(stream_text_chunks(fallback)):
                 collected += chunk
                 placeholder.markdown(collected + "▌")
-                if chunk_index % 4 == 0:
+                if chunk_index == 0 or chunk_index % 4 == 0:
                     scroll_chat_to_bottom()
 
         placeholder.markdown(collected)
@@ -1287,7 +2099,7 @@ def scroll_chat_to_bottom():
     )
 
 
-def render_chat_panel(kpis, events, correlations, actions, start, end, role):
+def render_chat_panel(kpis, events, correlations, actions, cause_candidates, start, end, role):
     openai_ready = is_openai_configured()
     status_label = (
         f"OpenAI · {configured_model()}" if openai_ready else "규칙 기반"
@@ -1309,7 +2121,6 @@ def render_chat_panel(kpis, events, correlations, actions, start, end, role):
             f'<div class="sq-context">현재 분석 맥락 · {start:%m.%d}–{end:%m.%d} · 이벤트 {len(events)}건 · 액션 {len(actions)}건</div>',
             unsafe_allow_html=True,
         )
-
         if "chat_messages" not in st.session_state:
             st.session_state.chat_messages = [
                 {
@@ -1331,8 +2142,7 @@ def render_chat_panel(kpis, events, correlations, actions, start, end, role):
             st.caption("빠른 질문")
             suggestions = [
                 "품절 위험 상품 알려줘",
-                "이번 기간 매출 변화는?",
-                "우선 액션을 추천해줘",
+                "판매 급증의 원인은?",
             ]
             for idx, suggestion in enumerate(suggestions):
                 if st.button(suggestion, key=f"suggest_{idx}", width="stretch"):
@@ -1347,14 +2157,29 @@ def render_chat_panel(kpis, events, correlations, actions, start, end, role):
 
             pending_chat = st.session_state.pop("pending_chat", None)
             if pending_chat:
-                scroll_chat_to_bottom()
+                answer_targets = get_answer_targets(pending_chat.get("target_agents", []))
                 workflow = pending_chat.get("workflow") or select_workflow_pattern(
-                    pending_chat["question"], pending_chat.get("target_agents", [])
+                    pending_chat["question"], answer_targets
                 )
                 streamed_answers = []
-                for requested_agent in get_answer_targets(
-                    pending_chat.get("target_agents", [])
-                ):
+                product_lead_workers = get_product_lead_worker_targets(answer_targets)
+                if PRODUCT_LEAD_AGENT in answer_targets:
+                    worker_results = [
+                        generate_chat_answer(
+                            pending_chat["question"],
+                            kpis,
+                            events,
+                            correlations,
+                            actions,
+                            cause_candidates,
+                            start,
+                            end,
+                            role,
+                            worker,
+                            workflow,
+                        )
+                        for worker in product_lead_workers
+                    ]
                     streamed_answers.append(
                         render_streaming_chat_answer(
                             pending_chat["question"],
@@ -1362,14 +2187,49 @@ def render_chat_panel(kpis, events, correlations, actions, start, end, role):
                             events,
                             correlations,
                             actions,
+                            cause_candidates,
                             start,
                             end,
                             role,
-                            requested_agent,
+                            PRODUCT_LEAD_AGENT,
                             workflow,
+                            source_answers=source_answers_from_results(worker_results),
                         )
                     )
-                append_assistant_messages(streamed_answers, workflow)
+                    streamed_answers.extend(
+                        [
+                            (response, source, error, assignment)
+                            for response, source, error, assignment in worker_results
+                            if error
+                        ]
+                    )
+                else:
+                    for requested_agent in answer_targets:
+                        streamed_answers.append(
+                            render_streaming_chat_answer(
+                                pending_chat["question"],
+                                kpis,
+                                events,
+                                correlations,
+                                actions,
+                                cause_candidates,
+                                start,
+                                end,
+                                role,
+                                requested_agent,
+                                workflow,
+                            )
+                        )
+                append_assistant_messages(
+                    [
+                        answer
+                        for answer in streamed_answers
+                        if answer[3].agent.label == PRODUCT_LEAD_AGENT
+                        or PRODUCT_LEAD_AGENT not in answer_targets
+                    ],
+                    workflow,
+                    pending_chat["question"],
+                )
                 errors = [
                     error for *_rest, error, _assignment in streamed_answers if error
                 ]
@@ -1384,12 +2244,33 @@ def render_chat_panel(kpis, events, correlations, actions, start, end, role):
             if st.session_state.get("openai_last_error"):
                 with st.expander("최근 OpenAI 연결 오류"):
                     st.caption(st.session_state["openai_last_error"])
+            if st.session_state.get("chat_log_error"):
+                with st.expander("최근 대화 저장 오류"):
+                    st.caption(st.session_state["chat_log_error"])
             if st.session_state.pop("chat_scroll_to_bottom", False):
                 scroll_chat_to_bottom()
 
         st.markdown('<div class="sq-chat-controls"></div>', unsafe_allow_html=True)
         with st.container(key="chat_agent_selector"):
             selected_before = st.session_state.get("chat_requested_agents", [])
+            render_agent_mode_card(selected_before)
+            shortcut_auto, shortcut_lead = st.columns(2)
+            if shortcut_auto.button(
+                "자동 배정",
+                icon=":material/route:",
+                key="agent_shortcut_auto",
+                width="stretch",
+            ):
+                st.session_state["chat_requested_agents"] = []
+                st.rerun()
+            if shortcut_lead.button(
+                "제품총괄",
+                icon=":material/hub:",
+                key="agent_shortcut_lead",
+                width="stretch",
+            ):
+                st.session_state["chat_requested_agents"] = [PRODUCT_LEAD_AGENT]
+                st.rerun()
             picker_label = (
                 f"답변 담당 · {len(selected_before)}명 선택"
                 if selected_before
@@ -1402,7 +2283,7 @@ def render_chat_panel(kpis, events, correlations, actions, start, end, role):
                 key="chat_agent_picker_popover",
             ):
                 st.markdown(
-                    '<div class="sq-agent-picker-summary">질문할 담당을 선택하세요. 복수 선택도 가능합니다.</div>',
+                    '<div class="sq-agent-picker-summary">담당 직접 선택</div>',
                     unsafe_allow_html=True,
                 )
                 requested_agents = st.pills(
@@ -1447,51 +2328,115 @@ def run_dashboard() -> None:
 
     with st.sidebar:
         st.markdown(
-            '<div class="sq-brand"><span>agent</span><span class="sq-brand-switch">⌃⌄</span></div>',
+            """
+            <div class="sq-brand">
+                <div class="sq-brand-mark">IH</div>
+                <div class="sq-brand-copy">
+                    <div class="sq-brand-name">InsightHub</div>
+                    <div class="sq-brand-sub">Commerce Ops AI</div>
+                </div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
+        st.markdown('<div class="sq-nav-section-label">Menu</div>', unsafe_allow_html=True)
         render_sidebar_nav(st.session_state["current_page"])
-        st.write("")
-        st.markdown('<div class="sq-eyebrow">FILTERS</div>', unsafe_allow_html=True)
-        date_range = st.date_input(
-            "분석 기간",
-            value=(bundle.max_date.date() - pd.Timedelta(days=13), bundle.max_date.date()),
-            min_value=bundle.min_date.date(),
-            max_value=bundle.max_date.date(),
-        )
-        if isinstance(date_range, tuple) and len(date_range) == 2:
-            start_date, end_date = date_range
-        else:
-            start_date = end_date = date_range
-        role = st.selectbox("역할", ["전체", "대표", "마케팅", "MD", "CRM/CS", "운영"])
-        method = st.selectbox("상관 방식", ["pearson", "spearman"])
-        st.caption(f"데이터: {bundle.min_date:%Y.%m.%d}–{bundle.max_date:%Y.%m.%d}")
+        with st.container(key="sidebar_filters"):
+            st.markdown(
+                '<div class="sq-filter-heading"><strong>조건 조절</strong><span>Filters</span></div>',
+                unsafe_allow_html=True,
+            )
+            default_start = bundle.max_date.date() - pd.Timedelta(days=13)
+            default_end = bundle.max_date.date()
+            start_col, end_col = st.columns(2, gap="small")
+            with start_col:
+                start_date = st.date_input(
+                    "시작",
+                    value=default_start,
+                    min_value=bundle.min_date.date(),
+                    max_value=bundle.max_date.date(),
+                    key="filter_start_date",
+                    format="YYYY.MM.DD",
+                )
+            with end_col:
+                end_date = st.date_input(
+                    "종료",
+                    value=default_end,
+                    min_value=bundle.min_date.date(),
+                    max_value=bundle.max_date.date(),
+                    key="filter_end_date",
+                    format="YYYY.MM.DD",
+                )
+            if start_date > end_date:
+                st.warning("종료일이 시작일보다 앞서 있어 기간을 자동으로 정렬했습니다.")
+                start_date, end_date = end_date, start_date
+            st.markdown(
+                (
+                    '<div class="sq-period-summary">'
+                    '<span>적용 기간</span>'
+                    f'<strong>{start_date:%Y.%m.%d} → {end_date:%Y.%m.%d}</strong>'
+                    '</div>'
+                ),
+                unsafe_allow_html=True,
+            )
+            role = "전체"
+            method = st.selectbox("상관 방식", ["pearson", "spearman"])
+            st.markdown(
+                f'<div class="sq-filter-caption">데이터 범위 {bundle.min_date:%Y.%m.%d}–{bundle.max_date:%Y.%m.%d}</div>',
+                unsafe_allow_html=True,
+            )
 
     start, end = pd.Timestamp(start_date), pd.Timestamp(end_date)
-    quality, events, correlations, insights, actions = run_analysis(
+    quality, events, correlations, insights, actions, cause_candidates = run_analysis(
         start_date, end_date, method, role
     )
     kpis, deltas = compare_period_kpis(bundle, start, end)
     page = st.session_state["current_page"]
     page_meta = PAGE_BY_KEY[page]
-    render_header(start, end, role, page_meta)
+    render_header(start, end, page_meta)
 
     main_col, chat_col = st.columns([2.55, 1], gap="large")
     with main_col:
         if page == "home":
             overview_page(
-                bundle, start, end, kpis, deltas, events, correlations, insights
+                bundle,
+                start,
+                end,
+                kpis,
+                deltas,
+                events,
+                correlations,
+                insights,
+                cause_candidates,
             )
         elif page == "events":
             events_page(events)
         elif page == "analytics":
-            correlations_page(correlations, method)
+            correlations_page(correlations, method, cause_candidates)
         elif page == "tasks":
             actions_page(actions, role, end)
         elif page == "agents":
             agents_page(quality, events, correlations, insights, actions)
+        elif page == "data_sources":
+            data_sources_page(bundle, quality)
+        elif page == "reports":
+            reports_page(
+                kpis, events, correlations, insights, actions, cause_candidates, start, end
+            )
         else:
-            reports_page(kpis, events, correlations, insights, actions, start, end)
+            overview_page(
+                bundle,
+                start,
+                end,
+                kpis,
+                deltas,
+                events,
+                correlations,
+                insights,
+                cause_candidates,
+            )
 
     with chat_col:
-        render_chat_panel(kpis, events, correlations, actions, start, end, role)
+        render_chat_panel(
+            kpis, events, correlations, actions, cause_candidates, start, end, role
+        )

@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.models import CorrelationResult, DataBundle
+from src.models import CauseAnalysisResult, CorrelationResult, DataBundle
 
 
 EVENT_COLUMNS = [
@@ -21,6 +21,23 @@ EVENT_COLUMNS = [
     "value",
     "change_rate",
     "description",
+]
+
+CAUSE_COLUMNS = [
+    "event_date",
+    "event_type",
+    "domain",
+    "target",
+    "event_metric",
+    "related_metric",
+    "correlation",
+    "direction",
+    "event_metric_change",
+    "related_metric_change",
+    "hypothesis",
+    "confidence",
+    "recommended_action",
+    "caution",
 ]
 
 
@@ -354,6 +371,146 @@ class CorrelationAnalyzerAgent:
         return CorrelationResult(matrix=matrix, top_pairs=top_pairs, daily_metrics=daily)
 
 
+class CauseAnalyzerAgent:
+    """Creates evidence-grounded cause hypotheses from events and correlations."""
+
+    caution = "상관관계와 이벤트 전후 변화는 원인 확정이 아니라 검토할 가설입니다."
+    metric_aliases = {
+        "recommendation_CTR": ("recommended_count", "click_count", "conversion_count"),
+        "ROAS": ("ad_spend", "clicks", "conversions"),
+    }
+
+    def run(
+        self,
+        events: pd.DataFrame,
+        correlations: CorrelationResult,
+    ) -> CauseAnalysisResult:
+        if events.empty or correlations.top_pairs.empty or correlations.daily_metrics.empty:
+            return CauseAnalysisResult(pd.DataFrame(columns=CAUSE_COLUMNS))
+
+        candidates: list[dict[str, object]] = []
+        daily = correlations.daily_metrics.copy()
+        for event in events.head(24).itertuples():
+            related_pairs = self._related_pairs(event.metric, correlations.top_pairs)
+            if related_pairs.empty:
+                related_pairs = correlations.top_pairs.head(2)
+            for pair in related_pairs.head(3).itertuples():
+                related_metric = (
+                    pair.metric_b
+                    if pair.metric_a in self._metric_candidates(event.metric)
+                    else pair.metric_a
+                )
+                event_change = self._window_change(daily, event.date, event.metric)
+                related_change = self._window_change(daily, event.date, related_metric)
+                confidence = self._confidence(abs(float(pair.coefficient)), event.severity)
+                candidates.append(
+                    {
+                        "event_date": pd.Timestamp(event.date),
+                        "event_type": event.event_type,
+                        "domain": event.domain,
+                        "target": event.product_name,
+                        "event_metric": event.metric,
+                        "related_metric": related_metric,
+                        "correlation": float(pair.coefficient),
+                        "direction": pair.direction,
+                        "event_metric_change": event_change,
+                        "related_metric_change": related_change,
+                        "hypothesis": self._hypothesis(
+                            event.event_type, related_metric, pair.direction
+                        ),
+                        "confidence": confidence,
+                        "recommended_action": self._recommended_action(
+                            event.event_type, related_metric
+                        ),
+                        "caution": self.caution,
+                    }
+                )
+
+        if not candidates:
+            return CauseAnalysisResult(pd.DataFrame(columns=CAUSE_COLUMNS))
+        frame = pd.DataFrame(candidates, columns=CAUSE_COLUMNS)
+        frame["strength"] = frame["correlation"].abs()
+        frame["confidence_rank"] = frame["confidence"].map(
+            {"High": 0, "Medium": 1, "Low": 2}
+        )
+        frame = (
+            frame.sort_values(["confidence_rank", "strength"], ascending=[True, False])
+            .drop(columns=["strength", "confidence_rank"])
+            .head(30)
+            .reset_index(drop=True)
+        )
+        return CauseAnalysisResult(frame)
+
+    def _related_pairs(self, metric: str, top_pairs: pd.DataFrame) -> pd.DataFrame:
+        candidates = self._metric_candidates(metric)
+        return top_pairs[
+            top_pairs["metric_a"].isin(candidates)
+            | top_pairs["metric_b"].isin(candidates)
+        ].copy()
+
+    def _metric_candidates(self, metric: str) -> tuple[str, ...]:
+        return self.metric_aliases.get(metric, (metric,))
+
+    def _window_change(self, daily: pd.DataFrame, event_date, metric: str) -> float | None:
+        metrics = self._metric_candidates(metric)
+        metric_name = next((item for item in metrics if item in daily.columns), None)
+        if metric_name is None:
+            return None
+        event_date = pd.Timestamp(event_date)
+        before = daily[
+            daily["date"].between(
+                event_date - pd.Timedelta(days=3), event_date - pd.Timedelta(days=1)
+            )
+        ][metric_name]
+        after = daily[
+            daily["date"].between(event_date, event_date + pd.Timedelta(days=3))
+        ][metric_name]
+        before_avg = before.mean()
+        after_avg = after.mean()
+        if pd.isna(before_avg) or pd.isna(after_avg) or before_avg == 0:
+            return None
+        return float(after_avg / before_avg - 1)
+
+    @staticmethod
+    def _confidence(strength: float, severity: str) -> str:
+        if strength >= 0.7 and severity == "High":
+            return "High"
+        if strength >= 0.45:
+            return "Medium"
+        return "Low"
+
+    @staticmethod
+    def _hypothesis(event_type: str, related_metric: str, direction: str) -> str:
+        metric_label = {
+            "ad_spend": "광고비 변화",
+            "clicks": "광고 클릭 변화",
+            "conversions": "광고 전환 변화",
+            "current_stock": "재고 수준 변화",
+            "rating": "평점 변화",
+            "recommended_count": "추천 노출 변화",
+            "click_count": "추천 클릭 변화",
+            "conversion_count": "추천 전환 변화",
+            "revenue": "매출 변화",
+            "quantity_sold": "판매량 변화",
+        }.get(related_metric, related_metric)
+        return (
+            f"{event_type}은 {metric_label}와 {direction}로 함께 움직인 신호가 있어 "
+            "운영 가설로 검토할 수 있습니다."
+        )
+
+    @staticmethod
+    def _recommended_action(event_type: str, related_metric: str) -> str:
+        if event_type in {"품절", "품절 위험"}:
+            return "판매 속도와 추천/광고 노출을 함께 확인하고 발주 또는 대체 상품 노출을 검토하세요."
+        if event_type == "광고 효율 저하":
+            return "클릭·전환·소재·타깃 변화를 분리해 보고 예산 조정 전 원인을 확인하세요."
+        if event_type in {"판매 급상승", "인기상품 진입"}:
+            return "재고 여력, 추천 노출, 광고 유입을 함께 확인해 기회 손실을 줄이세요."
+        if event_type == "판매 급감":
+            return "가격·노출·리뷰·재고 변화를 비교해 하락 원인 후보를 좁히세요."
+        return f"{related_metric} 변화를 이벤트 전후로 재확인하고 담당팀 액션으로 연결하세요."
+
+
 class InsightGeneratorAgent:
     """Turns structured analysis into role-specific, evidence-grounded statements."""
 
@@ -388,8 +545,6 @@ class InsightGeneratorAgent:
                 f"{pair['metric_a']}와 {pair['metric_b']}가 {pair['direction']} "
                 f"(r={pair['coefficient']:.2f})를 보입니다."
             )
-        if role != "전체":
-            insights.append(f"현재 화면은 {role} 관점의 우선순위로 정리했습니다.")
         insights.append("상관관계는 인과관계를 뜻하지 않으므로 프로모션·요일·계절성을 함께 확인해야 합니다.")
         return insights[:5]
 
@@ -405,6 +560,7 @@ class WeeklyReportAgent:
         insights: list[str],
         start: pd.Timestamp,
         end: pd.Timestamp,
+        cause_candidates: pd.DataFrame | None = None,
     ) -> str:
         lines = [
             f"# AI 커머스 주간 리포트 ({start:%Y-%m-%d} ~ {end:%Y-%m-%d})",
@@ -414,6 +570,11 @@ class WeeklyReportAgent:
             f"- 주문: {kpis['orders']:,.0f}건",
             f"- ROAS: {kpis['roas']:.1f}%",
             f"- 신규 고객: {kpis['new_customers']:,.0f}명",
+            f"- 평균 평점: {kpis['rating']:.2f}점",
+            "",
+            "## 확인된 데이터",
+            f"- 선택 기간 이벤트는 총 {len(events)}건이며, High 이벤트는 {int((events['severity'] == 'High').sum())}건입니다.",
+            f"- 실행 액션은 총 {len(ActionPlannerAgent().run(events, end, cause_candidates))}건 생성되었습니다.",
             "",
             "## 핵심 인사이트",
         ]
@@ -428,7 +589,31 @@ class WeeklyReportAgent:
             lines.append(
                 f"- {row.metric_a} ↔ {row.metric_b}: {row.coefficient:.2f} ({row.direction})"
             )
-        lines.append("\n> 상관관계는 인과관계를 의미하지 않습니다.")
+        lines.extend(["", "## AI 해석/가설: 원인 후보"])
+        if cause_candidates is not None and not cause_candidates.empty:
+            for row in cause_candidates.head(5).itertuples():
+                lines.append(
+                    f"- [{row.confidence}] {row.target} · {row.event_type}: "
+                    f"{row.related_metric} r={row.correlation:.2f}, 전후 변화 {_format_change(row.related_metric_change)}. "
+                    f"{row.hypothesis}"
+                )
+        else:
+            lines.append("- 선택 기간에는 충분한 원인 후보를 계산할 수 없습니다.")
+        lines.extend(
+            [
+                "",
+                "## 이번 주 실행 우선순위",
+                "- High 이벤트는 24시간 내 담당팀이 원인 후보와 재고·광고·추천 지표를 함께 확인합니다.",
+                "- Medium 이벤트는 3일 내 운영 가설을 검증하고 액션 상태를 업데이트합니다.",
+                "",
+                "## 역할별 확인 포인트",
+                "- 마케팅: ROAS, 클릭, 전환, 캠페인 변화",
+                "- MD/운영: 판매 급변, 안전재고, 품절 위험",
+                "- CRM/CS: 평점, 문의, 환불, 고객 영향",
+                "",
+                "> 상관관계와 원인 후보는 인과관계 확정이 아니라 검토할 가설입니다.",
+            ]
+        )
         return "\n".join(lines)
 
 
@@ -445,12 +630,22 @@ class ActionPlannerAgent:
         "추천상품 성과 우수": ("CRM/CS", "성과가 높은 추천 슬롯과 고객 세그먼트를 확대 테스트하세요."),
     }
 
-    def run(self, events: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
+    def run(
+        self,
+        events: pd.DataFrame,
+        today: pd.Timestamp,
+        cause_candidates: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
         actions: list[dict[str, object]] = []
         for idx, row in events.iterrows():
             team, instruction = self.mappings.get(
                 row["event_type"], ("운영", "관련 지표를 검토하고 후속 조치를 정의하세요.")
             )
+            cause = self._matching_cause(row, cause_candidates)
+            if cause is not None:
+                instruction = (
+                    f"{instruction} 근거 가설: {cause['related_metric']} 변화와 함께 확인하세요."
+                )
             priority = row["severity"] if row["severity"] in {"High", "Medium"} else "Low"
             due_days = {"High": 1, "Medium": 3, "Low": 7}[priority]
             actions.append(
@@ -462,10 +657,32 @@ class ActionPlannerAgent:
                     "priority": priority,
                     "due_date": pd.Timestamp(today) + timedelta(days=due_days),
                     "instruction": instruction,
+                    "recommendation_reason": self._recommendation_reason(row, cause),
                     "status": "대기",
                 }
             )
         return pd.DataFrame(actions).head(30)
+
+    @staticmethod
+    def _matching_cause(row: pd.Series, cause_candidates: pd.DataFrame | None):
+        if cause_candidates is None or cause_candidates.empty:
+            return None
+        matched = cause_candidates[
+            (cause_candidates["event_type"] == row["event_type"])
+            & (cause_candidates["target"] == row["product_name"])
+        ]
+        if matched.empty:
+            return None
+        return matched.iloc[0]
+
+    @staticmethod
+    def _recommendation_reason(row: pd.Series, cause) -> str:
+        if cause is None:
+            return f"{row['severity']} 등급 {row['event_type']} 이벤트 기반 권고입니다."
+        return (
+            f"{row['severity']} 등급 {row['event_type']} 이벤트와 "
+            f"{cause['related_metric']} 상관 신호를 함께 반영했습니다."
+        )
 
 
 class TaskAssignmentAgent:
@@ -494,6 +711,7 @@ class ExecutiveReportAgent:
         events: pd.DataFrame,
         actions: pd.DataFrame,
         insights: list[str],
+        cause_candidates: pd.DataFrame | None = None,
     ) -> str:
         approvals = actions[
             (actions["priority"] == "High") & actions["team"].isin(["MD", "마케팅", "운영"])
@@ -505,8 +723,22 @@ class ExecutiveReportAgent:
             "## 핵심 판단",
             *[f"- {item}" for item in insights[:3]],
             "",
-            "## 승인·결정 필요",
+            "## 근거 요약",
+            f"- High 이벤트 {int((events['severity'] == 'High').sum())}건, 전체 액션 {len(actions)}건입니다.",
         ]
+        if cause_candidates is not None and not cause_candidates.empty:
+            top = cause_candidates.iloc[0]
+            lines.append(
+                f"- 주요 원인 후보: {top['target']}의 {top['event_type']}은 "
+                f"{top['related_metric']}와 r={top['correlation']:.2f} 관계를 보입니다."
+            )
+        lines.extend(
+            [
+                "- 위 원인 후보는 확정 원인이 아니라 검토 가설입니다.",
+                "",
+                "## 승인·결정 필요",
+            ]
+        )
         if approvals.empty:
             lines.append("- 현재 즉시 승인이 필요한 High 액션은 없습니다.")
         else:
@@ -516,6 +748,15 @@ class ExecutiveReportAgent:
                     for row in approvals.itertuples()
                 ]
             )
+        lines.extend(
+            [
+                "",
+                "## 역할별 후속 확인",
+                "- 마케팅: 광고 효율 하락과 클릭·전환 변화를 확인",
+                "- MD/운영: 품절 위험과 판매 속도 기반 발주 판단",
+                "- CRM/CS: 리뷰·문의·환불 신호의 고객 영향 확인",
+            ]
+        )
         return "\n".join(lines)
 
 
@@ -527,6 +768,7 @@ class AgentOutputs:
     correlations: CorrelationResult
     insights: list[str]
     actions: pd.DataFrame
+    cause_candidates: pd.DataFrame
 
 
 def calculate_kpis(
@@ -546,3 +788,9 @@ def calculate_kpis(
         "returning_customers": float(customers["returning_customers"].sum()),
         "rating": float(reviews["rating"].mean()) if not reviews.empty else 0,
     }
+
+
+def _format_change(value) -> str:
+    if value is None or pd.isna(value):
+        return "계산 불가"
+    return f"{float(value):+.1%}"

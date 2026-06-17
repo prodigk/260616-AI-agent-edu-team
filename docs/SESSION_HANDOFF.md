@@ -1,6 +1,6 @@
 # Session Handoff - 2026-06-16
 
-Read `AGENTS.md`, `README.md`, and this file before continuing.
+Read `AGENTS.md`, `README.md`, and `docs/AGENTS.md` before continuing.
 
 ## What Was Completed
 
@@ -32,7 +32,9 @@ Read `AGENTS.md`, `README.md`, and this file before continuing.
   - stored chat metadata: `append_chat_exchange`
   - fixed chat layout: `render_chat_panel`
 - `src/role_agents.py`
-  - role definitions, keywords, prompts, and `dashboard_page`
+  - role metadata, keywords, deterministic routing, and `dashboard_page`
+- `agent/`
+  - role-specific answer instructions
   - `assign_role_agent`
 - `src/openai_service.py`
   - role-aware aggregated context and OpenAI instructions

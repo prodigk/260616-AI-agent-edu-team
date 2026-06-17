@@ -12,13 +12,83 @@ def answer_dashboard_question(
     events: pd.DataFrame,
     correlations: CorrelationResult,
     actions: pd.DataFrame,
+    cause_candidates: pd.DataFrame,
     start: pd.Timestamp,
     end: pd.Timestamp,
     assignment: AgentAssignment,
+    source_answers: list[dict[str, str]] | None = None,
 ) -> str:
     q = question.strip().lower()
     context = f"{start:%Y-%m-%d}부터 {end:%Y-%m-%d}까지"
     agent_key = assignment.agent.key
+
+    if agent_key == "product_lead" and source_answers:
+        lines = [
+            f"{context} 제품총괄 종합 답변입니다.",
+            "담당별 답변을 비교해 중복은 줄이고 실행 우선순위 중심으로 정리했습니다.",
+            "",
+            "## 핵심 판단",
+        ]
+        for answer in source_answers[:5]:
+            summary = answer.get("content", "").strip().splitlines()
+            first_line = summary[0] if summary else "요약 가능한 답변이 없습니다."
+            lines.append(f"- {answer.get('agent', '담당')}: {first_line[:180]}")
+        lines.extend(
+            [
+                "",
+                "## 제품총괄 권고",
+                "- 원인 후보와 상관관계는 확정 원인이 아니라 검토 가설로 두고, High 이벤트부터 검증하세요.",
+                "- 매출·재고 영향이 큰 항목은 MD/운영이 먼저 처리하고, 마케팅·CS는 고객 영향과 유입 품질을 병행 점검하세요.",
+                "- 다음 액션은 담당팀, 마감일, 검증 지표를 함께 지정해 Tasks 페이지에서 추적하세요.",
+            ]
+        )
+        return "\n".join(lines)
+
+    if any(word in q for word in ["원인", "왜", "상관", "관계", "급상승", "급감", "roas 하락"]):
+        if cause_candidates.empty:
+            return (
+                f"{context} 계산 가능한 원인 후보가 충분하지 않습니다.\n"
+                "상관관계는 인과관계를 의미하지 않으므로 이벤트 전후 지표와 운영 맥락을 함께 확인하세요."
+            )
+        scoped = _prioritize_causes(cause_candidates, assignment).head(3)
+        lines = [f"{context} 원인 후보 분석입니다."]
+        for row in scoped.itertuples():
+            lines.extend(
+                [
+                    f"\n- 확인된 사실: {row.target}의 {row.event_type} 이벤트와 "
+                    f"{row.related_metric} 지표가 r={row.correlation:.2f} ({row.direction})로 함께 움직였습니다.",
+                    f"  가능한 가설: {row.hypothesis}",
+                    f"  추가 확인 필요 데이터: 프로모션, 요일성, 가격/노출 변경, 재고 운영 기록을 함께 확인하세요.",
+                    f"  추천 액션: {row.recommended_action}",
+                ]
+            )
+        lines.append("주의: 원인 후보는 확정 원인이 아니라 검토할 가설입니다.")
+        return "\n".join(lines)
+
+    if any(word in q for word in ["액션", "할 일", "조치", "권고", "추천"]):
+        selected = _prioritize_actions(actions, assignment)
+        high = selected[selected["priority"] == "High"] if not selected.empty else selected
+        selected = high if not high.empty else selected
+        if selected.empty:
+            return "현재 생성된 역할별 권고 액션이 없습니다."
+        lines = [
+            f"{assignment.agent.label} 관점의 우선 권고입니다.",
+            f"- 담당 관점 요약: {assignment.agent.description}",
+            "- 우선 확인 지표: KPI, 이벤트 심각도, 원인 후보, 마감일",
+        ]
+        for row in selected.head(3).itertuples():
+            reason = getattr(row, "recommendation_reason", "이벤트 기반 권고입니다.")
+            lines.append(
+                f"- 추천 액션: [{row.team} · {row.priority}] {row.target}: {row.instruction} "
+                f"(권고 사유: {reason})"
+            )
+        lines.extend(
+            [
+                "- 예상 리스크: 원인 후보를 확정 원인으로 단정하면 잘못된 예산·재고 판단으로 이어질 수 있습니다.",
+                "- 후속 질문 제안: 이 액션의 근거 이벤트와 관련 지표를 물어보세요.",
+            ]
+        )
+        return "\n".join(lines)
 
     if agent_key == "inventory":
         risks = events[events["event_type"].isin(["품절", "품절 위험"])]
@@ -69,20 +139,6 @@ def answer_dashboard_question(
         )
 
     if agent_key == "product_planning" and any(
-        word in q for word in ["액션", "할 일", "조치"]
-    ):
-        high = actions[actions["priority"] == "High"]
-        selected = high if not high.empty else actions
-        if selected.empty:
-            return "현재 생성된 액션이 없습니다."
-        lines = [f"우선 실행할 액션 {min(4, len(selected))}개입니다."]
-        for row in selected.head(4).itertuples():
-            lines.append(
-                f"- [{row.team} · {row.priority}] {row.target}: {row.instruction}"
-            )
-        return "\n".join(lines)
-
-    if agent_key == "product_planning" and any(
         word in q for word in ["상관", "관계", "원인"]
     ):
         if correlations.top_pairs.empty:
@@ -123,3 +179,27 @@ def answer_dashboard_question(
         f"- 실행 액션 {len(actions)}건\n"
         "매출, 품절 위험, 광고 효율, 상관관계, 우선 액션 중 하나를 물어보세요."
     )
+
+
+def _prioritize_causes(
+    cause_candidates: pd.DataFrame, assignment: AgentAssignment
+) -> pd.DataFrame:
+    if cause_candidates.empty or "domain" not in cause_candidates.columns:
+        return cause_candidates
+    preferred = cause_candidates[
+        cause_candidates["domain"].isin(assignment.agent.domains)
+    ]
+    if preferred.empty:
+        return cause_candidates
+    remaining = cause_candidates[~cause_candidates.index.isin(preferred.index)]
+    return pd.concat([preferred, remaining])
+
+
+def _prioritize_actions(actions: pd.DataFrame, assignment: AgentAssignment) -> pd.DataFrame:
+    if actions.empty or "team" not in actions.columns:
+        return actions
+    preferred = actions[actions["team"].isin(assignment.agent.teams)]
+    if preferred.empty:
+        return actions
+    remaining = actions[~actions.index.isin(preferred.index)]
+    return pd.concat([preferred, remaining])

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 AUTO_AGENT = "자동 배정"
+PRODUCT_LEAD_AGENT = "제품총괄"
+AGENT_DIR = Path(__file__).resolve().parents[1] / "agent"
 
 
 @dataclass(frozen=True)
@@ -25,14 +28,25 @@ class AgentAssignment:
     reason: str
 
 
+def load_agent_instruction(key: str, fallback: str) -> str:
+    path = AGENT_DIR / f"{key}.md"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return fallback
+
+
 ROLE_AGENTS = (
     RoleAgent(
         key="marketing",
         label="마케팅 담당",
         description="광고비, 채널, 캠페인, ROAS와 유입·전환 성과",
-        instructions=(
-            "마케팅 성과 관점에서 채널·캠페인 효율과 예산 우선순위를 설명하세요. "
-            "ROAS, 광고비, 클릭, 전환 및 마케팅 이벤트를 먼저 근거로 사용하세요."
+        instructions=load_agent_instruction(
+            "marketing",
+            (
+                "마케팅 성과 관점에서 채널·캠페인 효율과 예산 우선순위를 설명하세요. "
+                "ROAS, 광고비, 클릭, 전환 및 마케팅 이벤트를 먼저 근거로 사용하세요."
+            ),
         ),
         keywords=(
             "마케팅",
@@ -55,9 +69,12 @@ ROLE_AGENTS = (
         key="customer_cs",
         label="고객 CS 담당",
         description="신규·재구매 고객, 리뷰, 평점과 고객 문의",
-        instructions=(
-            "고객 경험과 CS 관점에서 신규·재구매 고객, 리뷰, 평점, 문의와 환불 신호를 "
-            "우선 설명하고 고객 영향과 후속 대응을 제안하세요."
+        instructions=load_agent_instruction(
+            "customer_cs",
+            (
+                "고객 경험과 CS 관점에서 신규·재구매 고객, 리뷰, 평점, 문의와 환불 신호를 "
+                "우선 설명하고 고객 영향과 후속 대응을 제안하세요."
+            ),
         ),
         keywords=(
             "고객",
@@ -81,9 +98,12 @@ ROLE_AGENTS = (
         key="inventory",
         label="재고관리 담당",
         description="현재 재고, 안전재고, 품절 위험과 발주 우선순위",
-        instructions=(
-            "재고 운영 관점에서 현재 재고, 안전재고, 품절 위험과 판매 속도를 우선 "
-            "설명하세요. 긴급도와 발주 또는 대체 상품 대응을 명확히 제시하세요."
+        instructions=load_agent_instruction(
+            "inventory",
+            (
+                "재고 운영 관점에서 현재 재고, 안전재고, 품절 위험과 판매 속도를 우선 "
+                "설명하세요. 긴급도와 발주 또는 대체 상품 대응을 명확히 제시하세요."
+            ),
         ),
         keywords=(
             "재고",
@@ -104,9 +124,12 @@ ROLE_AGENTS = (
         key="sales_product",
         label="매출 상품 담당",
         description="매출, 주문, 판매량과 상품별 판매 성과",
-        instructions=(
-            "매출과 상품 운영 관점에서 매출, 주문, 판매량, 급등락 상품을 우선 설명하세요. "
-            "전체 실적과 상품별 기여를 구분하고 바로 확인할 운영 포인트를 제시하세요."
+        instructions=load_agent_instruction(
+            "sales_product",
+            (
+                "매출과 상품 운영 관점에서 매출, 주문, 판매량, 급등락 상품을 우선 설명하세요. "
+                "전체 실적과 상품별 기여를 구분하고 바로 확인할 운영 포인트를 제시하세요."
+            ),
         ),
         keywords=(
             "매출",
@@ -130,9 +153,12 @@ ROLE_AGENTS = (
         key="product_planning",
         label="제품 기획 담당",
         description="상품 구성, 추천 성과, 인기상품과 제품 전략",
-        instructions=(
-            "제품 기획 관점에서 상품 구성, 인기상품, 추천 성과, 가격·프로모션·신상품 "
-            "기회를 종합하세요. 단기 운영 조치와 검증이 필요한 제품 가설을 구분하세요."
+        instructions=load_agent_instruction(
+            "product_planning",
+            (
+                "제품 기획 관점에서 상품 구성, 인기상품, 추천 성과, 가격·프로모션·신상품 "
+                "기회를 종합하세요. 단기 운영 조치와 검증이 필요한 제품 가설을 구분하세요."
+            ),
         ),
         keywords=(
             "제품 기획",
@@ -158,6 +184,37 @@ ROLE_AGENTS = (
         ),
         domains=("매출·상품", "재고·추천"),
         teams=("MD", "마케팅"),
+        dashboard_page="상관 분석",
+    ),
+    RoleAgent(
+        key="product_lead",
+        label=PRODUCT_LEAD_AGENT,
+        description="담당별 답변을 종합·평가해 제품/운영 의사결정으로 정리하는 총괄",
+        instructions=load_agent_instruction(
+            "product_lead",
+            (
+                "제품총괄 관점에서 여러 담당자의 답변을 비교·종합하세요. "
+                "Parallelization에서는 Aggregator로, Orchestrator에서는 Synthesizer로, "
+                "Evaluator-optimizer에서는 LLM Call Evaluator로 행동하세요. "
+                "중복을 줄이고 상충되는 내용은 판단 기준을 밝혀 정리하며, 최종 권고와 다음 액션을 명확히 제시하세요."
+            ),
+        ),
+        keywords=(
+            "제품총괄",
+            "총괄",
+            "종합",
+            "최종",
+            "의사결정",
+            "우선순위",
+            "평가",
+            "검수",
+            "퀄리티",
+            "품질",
+            "synthesize",
+            "aggregate",
+        ),
+        domains=("매출·상품", "마케팅", "고객·CS", "재고·추천"),
+        teams=("MD", "마케팅", "CRM/CS", "운영"),
         dashboard_page="상관 분석",
     ),
 )
