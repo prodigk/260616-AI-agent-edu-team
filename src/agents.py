@@ -42,7 +42,7 @@ CAUSE_COLUMNS = [
 
 
 class DataLoaderAgent:
-    """Loads and validates the seven commerce datasets."""
+    """Loads and validates core and auxiliary commerce datasets."""
 
     files = {
         "sales": "sales_data.csv",
@@ -52,6 +52,15 @@ class DataLoaderAgent:
         "inventory": "inventory_data.csv",
         "reviews": "review_cs_data.csv",
         "recommendations": "recommendation_log.csv",
+        "hourly_events": "hourly_web_events.csv",
+        "customer_segments": "customer_segment_data.csv",
+        "campaign_products": "campaign_product_performance.csv",
+        "cross_sell": "cross_sell_data.csv",
+        "inventory_loss": "inventory_loss_estimate.csv",
+        "product_retention": "product_retention_data.csv",
+        "pricing_promotions": "pricing_promotion_data.csv",
+        "delivery_experience": "delivery_experience_data.csv",
+        "brand_search": "brand_search_data.csv",
     }
 
     def run(self, data_dir: str | Path) -> tuple[DataBundle, pd.DataFrame]:
@@ -89,6 +98,15 @@ class DataLoaderAgent:
             reviews=frames["reviews"],
             recommendations=frames["recommendations"],
             data_dir=data_dir,
+            hourly_events=frames["hourly_events"],
+            customer_segments=frames["customer_segments"],
+            campaign_products=frames["campaign_products"],
+            cross_sell=frames["cross_sell"],
+            inventory_loss=frames["inventory_loss"],
+            product_retention=frames["product_retention"],
+            pricing_promotions=frames["pricing_promotions"],
+            delivery_experience=frames["delivery_experience"],
+            brand_search=frames["brand_search"],
         )
         return bundle, pd.DataFrame(quality_rows)
 

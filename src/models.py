@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +16,15 @@ class DataBundle:
     reviews: pd.DataFrame
     recommendations: pd.DataFrame
     data_dir: Path
+    hourly_events: pd.DataFrame = field(default_factory=pd.DataFrame)
+    customer_segments: pd.DataFrame = field(default_factory=pd.DataFrame)
+    campaign_products: pd.DataFrame = field(default_factory=pd.DataFrame)
+    cross_sell: pd.DataFrame = field(default_factory=pd.DataFrame)
+    inventory_loss: pd.DataFrame = field(default_factory=pd.DataFrame)
+    product_retention: pd.DataFrame = field(default_factory=pd.DataFrame)
+    pricing_promotions: pd.DataFrame = field(default_factory=pd.DataFrame)
+    delivery_experience: pd.DataFrame = field(default_factory=pd.DataFrame)
+    brand_search: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     @property
     def min_date(self) -> pd.Timestamp:

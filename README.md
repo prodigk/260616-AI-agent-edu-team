@@ -1,7 +1,7 @@
 # AI 커머스 운영 대시보드
 
 `docs/Agent Task Definitions.md`에 정의된 8개 에이전트를 Python 모듈로 구현하고,
-7개 CSV 데이터를 Streamlit 대시보드에서 분석하는 팀 프로젝트입니다.
+7개 코어 CSV와 9개 보조 CSV 데이터를 Streamlit 대시보드에서 분석하는 팀 프로젝트입니다.
 
 ## 실행
 

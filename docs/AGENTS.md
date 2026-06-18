@@ -37,7 +37,7 @@ reviewing the result. User-facing copy is Korean.
 - `src/role_agents.py`: answer-specialist definitions and deterministic
   question routing.
 - `agent/`: Markdown instructions for each chat answer-specialist.
-- `db/`: seven required CSV datasets.
+- `db/`: seven core CSV datasets plus auxiliary analysis CSVs.
 - `.streamlit/config.toml`: app theme.
 
 The eight agents are implemented as Python modules, not separate services:
@@ -147,8 +147,7 @@ successful API response and fallback behavior without exposing secrets.
 - Work with the current Streamlit/Python architecture and existing agent
   boundaries.
 - Keep changes scoped; avoid unrelated refactors or generated-file churn.
-- Do not modify the seven CSV fixtures unless the task is specifically about
-  data.
+- Do not modify CSV fixtures unless the task is specifically about data.
 - Update `README.md`, this file, or `.env.example` when setup or architecture
   changes.
 - Keep `.env`, `.venv`, caches, and macOS metadata out of Git.
@@ -158,7 +157,7 @@ successful API response and fallback behavior without exposing secrets.
 ## Current State
 
 The MVP currently provides seven sidebar pages: 종합 현황, 이벤트 탐지, 상관 분석,
-실행 과제, AI 에이전트, 데이터 소스, 리포트. The seven CSVs load successfully, all eight
+실행 과제, AI 에이전트, 데이터 소스, 리포트. Core and auxiliary CSVs load successfully, all eight
 analysis stages run in-process, and the right-side chat can automatically
 route questions to role agents, accept direct assignment, and let 제품총괄
 synthesize selected 담당 answers. API failures automatically fall back to

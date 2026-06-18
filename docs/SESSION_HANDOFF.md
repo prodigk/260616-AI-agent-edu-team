@@ -91,5 +91,5 @@ The next requested direction is answer-driven dashboard navigation:
 ## Repository State
 
 The repository files are currently mostly untracked in Git. Do not reset,
-restore, or remove existing work. Do not modify the seven CSV fixtures unless
-the task is specifically about data.
+restore, or remove existing work. Do not modify CSV fixtures unless the task is
+specifically about data.

@@ -161,6 +161,60 @@ DATA_SOURCE_DEFINITIONS = (
         "domain": "재고·추천",
         "description": "추천 노출, 클릭, 전환 로그를 통해 추천 성과를 분석하는 데이터입니다.",
     },
+    {
+        "attr": "hourly_events",
+        "file": "hourly_web_events.csv",
+        "domain": "마케팅",
+        "description": "시간대별 클릭수, 전환수, 전환율 추세를 비교하기 위한 웹 이벤트 데이터입니다.",
+    },
+    {
+        "attr": "customer_segments",
+        "file": "customer_segment_data.csv",
+        "domain": "고객·CS",
+        "description": "고객 세그먼트별 신규 가입, 재구매율, 장바구니 이탈률을 분석하는 데이터입니다.",
+    },
+    {
+        "attr": "campaign_products",
+        "file": "campaign_product_performance.csv",
+        "domain": "마케팅",
+        "description": "광고 채널·캠페인·소재 유형·상품군별 비용 대비 매출 효율을 분석하는 데이터입니다.",
+    },
+    {
+        "attr": "cross_sell",
+        "file": "cross_sell_data.csv",
+        "domain": "매출·상품",
+        "description": "상품 카테고리 간 함께 구매되는 패턴을 분석하는 교차 판매 데이터입니다.",
+    },
+    {
+        "attr": "inventory_loss",
+        "file": "inventory_loss_estimate.csv",
+        "domain": "재고·추천",
+        "description": "주차별 재고 부족 발생 빈도와 예상 매출 손실을 추정하는 데이터입니다.",
+    },
+    {
+        "attr": "product_retention",
+        "file": "product_retention_data.csv",
+        "domain": "고객·CS",
+        "description": "상품별 리뷰 점수와 재구매율의 관계를 분석하기 위한 제품 리텐션 데이터입니다.",
+    },
+    {
+        "attr": "pricing_promotions",
+        "file": "pricing_promotion_data.csv",
+        "domain": "매출·상품",
+        "description": "상품별 판매가, 할인율, 쿠폰 캠페인과 매출 변화의 상관관계를 분석하는 데이터입니다.",
+    },
+    {
+        "attr": "delivery_experience",
+        "file": "delivery_experience_data.csv",
+        "domain": "고객·CS",
+        "description": "상품별 배송 지연, 평균 배송일, 리뷰 평점 악화 신호를 연결하는 데이터입니다.",
+    },
+    {
+        "attr": "brand_search",
+        "file": "brand_search_data.csv",
+        "domain": "마케팅",
+        "description": "광고 캠페인 기간과 브랜드 검색량 변화의 상관관계를 분석하는 데이터입니다.",
+    },
 )
 DATA_SOURCE_BY_FILE = {source["file"]: source for source in DATA_SOURCE_DEFINITIONS}
 
@@ -1592,7 +1646,7 @@ def actions_page(actions, role, end):
 def agents_page(quality, events, correlations, insights, actions):
     st.markdown('<div class="sq-section-title">에이전트 실행 상태</div>', unsafe_allow_html=True)
     agents = [
-        ("Data Loader Agent", f"7개 데이터셋 · {quality['rows'].sum():,}행"),
+        ("Data Loader Agent", f"{len(quality)}개 데이터셋 · {quality['rows'].sum():,}행"),
         ("Event Detector Agent", f"{len(events)}개 이벤트 탐지"),
         ("Correlation Analyzer Agent", f"{len(correlations.top_pairs)}개 상위 관계"),
         ("Insight Generator Agent", f"{len(insights)}개 인사이트"),
