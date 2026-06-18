@@ -522,6 +522,35 @@ def inject_square_theme() -> None:
         .sq-agent-dot {width:9px;height:9px;border-radius:50%;background:#3DD598;box-shadow:0 0 0 4px rgba(61,213,152,.12);}
         .sq-agent-name {font-weight:700;flex:1;}
         .sq-agent-state {color:#15966a;font-size:11px;}
+        .sq-agent-section {
+            margin:2px 0 22px;
+        }
+        .sq-agent-section-head {
+            display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
+            margin:0 0 12px;
+        }
+        .sq-agent-section-copy {
+            color:#696974;font-size:12px;line-height:1.55;max-width:720px;
+        }
+        .sq-agent-section-badge {
+            flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;
+            padding:6px 10px;border-radius:999px;background:#fff;
+            border:1px solid rgba(226,226,234,.85);
+            color:#44444F;font-size:11px;font-weight:800;
+        }
+        [class*="st-key-analysis_agent_card_"],
+        [class*="st-key-answer_agent_card_"] {
+            background:#fff !important;
+            border-color:rgba(226,226,234,.95) !important;
+            box-shadow:0 8px 24px rgba(68,68,79,.035);
+        }
+        [class*="st-key-analysis_agent_card_"] [data-testid="stVerticalBlock"],
+        [class*="st-key-answer_agent_card_"] [data-testid="stVerticalBlock"] {
+            background:#fff !important;
+        }
+        @media (max-width: 900px) {
+            .sq-agent-section-head { align-items:flex-start;flex-direction:column;gap:8px; }
+        }
         [data-testid="stMetric"] {
             background:#fff;border:1px solid rgba(226,226,234,.75);
             padding:17px 19px;border-radius:18px;
@@ -1644,33 +1673,60 @@ def actions_page(actions, role, end):
 
 
 def agents_page(quality, events, correlations, insights, actions):
-    st.markdown('<div class="sq-section-title">에이전트 실행 상태</div>', unsafe_allow_html=True)
-    agents = [
-        ("Data Loader Agent", f"{len(quality)}개 데이터셋 · {quality['rows'].sum():,}행"),
-        ("Event Detector Agent", f"{len(events)}개 이벤트 탐지"),
-        ("Correlation Analyzer Agent", f"{len(correlations.top_pairs)}개 상위 관계"),
-        ("Insight Generator Agent", f"{len(insights)}개 인사이트"),
-        ("Weekly Report Agent", "리포트 생성 준비"),
-        ("Action Planner Agent", f"{len(actions)}개 액션"),
-        ("Task Assignment Agent", "액션 보드 연결"),
-        ("Executive Report Agent", "대표 요약 생성 준비"),
+    st.markdown('<div class="sq-section-title">분석 실행 에이전트</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="sq-agent-section">
+          <div class="sq-agent-section-head">
+            <div class="sq-agent-section-copy">
+              CSV 로딩부터 이벤트 탐지, 상관 분석, 리포트와 액션 생성까지 대시보드 데이터를 처리하는 백엔드 분석 파이프라인입니다.
+              현재 화면의 KPI, 이벤트, 상관관계, 실행 과제는 이 에이전트들의 결과를 기반으로 구성됩니다.
+            </div>
+            <div class="sq-agent-section-badge">8개 분석 모듈 · 정상</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    analysis_agents = [
+        ("Data Loader Agent", "16개 CSV의 스키마와 품질을 점검해 분석 가능한 데이터 번들로 구성합니다.", f"{len(quality)}개 데이터셋 · {quality['rows'].sum():,}행"),
+        ("Event Detector Agent", "판매 급등락, 품절 위험, 광고 효율 변화, 추천 성과 이벤트를 탐지합니다.", f"{len(events)}개 이벤트"),
+        ("Correlation Analyzer Agent", "기간 내 주요 운영 지표 간 상관관계를 계산하고 강한 관계를 정렬합니다.", f"{len(correlations.top_pairs)}개 상위 관계"),
+        ("Insight Generator Agent", "KPI, 이벤트, 상관관계를 운영자가 읽기 쉬운 핵심 인사이트로 압축합니다.", f"{len(insights)}개 인사이트"),
+        ("Weekly Report Agent", "실무자용 주간 운영 리포트를 Markdown 형식으로 생성합니다.", "운영 리포트 준비"),
+        ("Action Planner Agent", "이벤트와 원인 후보를 바탕으로 담당팀별 실행 액션을 생성합니다.", f"{len(actions)}개 액션"),
+        ("Task Assignment Agent", "액션을 팀과 우선순위 기준으로 정리해 실행 과제 보드에 연결합니다.", "액션 보드 연결"),
+        ("Executive Report Agent", "대표/의사결정자용 요약 리포트와 결정 필요 항목을 생성합니다.", "대표 요약 준비"),
     ]
-    cols = st.columns(2)
-    for idx, (name, state) in enumerate(agents):
-        with cols[idx % 2]:
-            st.markdown(
-                f"""
-                <div class="sq-card" style="min-height:auto;margin-bottom:12px">
-                  <div class="sq-agent" style="border:0;padding:0">
-                    <span class="sq-agent-dot"></span>
-                    <span class="sq-agent-name">{name}</span>
-                    <span class="sq-agent-state">정상</span>
-                  </div>
-                  <div class="sq-card-meta" style="margin-left:18px">{state}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    for idx, (name, description, state) in enumerate(analysis_agents):
+        with st.container(border=True, key=f"analysis_agent_card_{idx}"):
+            st.markdown(f"**{name}**")
+            st.caption(description)
+            st.markdown(f"`정상` `{state}` `분석 파이프라인`")
+
+    st.markdown('<div class="sq-section-title" style="margin-top:26px">채팅 답변 담당 에이전트</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="sq-agent-section">
+          <div class="sq-agent-section-head">
+            <div class="sq-agent-section-copy">
+              우측 채팅에서 질문의 관점을 담당하는 역할형 에이전트입니다.
+              원본 CSV를 직접 노출하지 않고, 현재 분석 기간의 KPI·이벤트·상관관계·원인 후보·액션 요약을 각 직무 관점으로 해석합니다.
+            </div>
+            <div class="sq-agent-section-badge">자동 배정 + 직접 선택</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    for idx, agent in enumerate(ROLE_AGENT_BY_LABEL.values()):
+        with st.container(border=True, key=f"answer_agent_card_{agent.key}"):
+            st.markdown(f"**{agent.label}**")
+            st.caption(agent.description)
+            domains = " ".join(f"`{domain}`" for domain in agent.domains)
+            teams = " ".join(f"`{team}`" for team in agent.teams)
+            st.markdown(f"{domains} {teams}")
+
     st.markdown('<div class="sq-section-title">데이터 품질</div>', unsafe_allow_html=True)
     st.dataframe(quality, width="stretch", hide_index=True)
 

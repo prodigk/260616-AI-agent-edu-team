@@ -11,4 +11,7 @@
 - `sales_product.md`: 매출 상품 담당
 - `product_planning.md`: 제품 기획 담당
 - `product_lead.md`: 제품총괄
+- `agent_creator.md`: AgentCreator, 대시보드 개발 시 역할별 답변 지침을 훈련·개선하는 내부 개발용 에이전트
 
+`AgentCreator`는 대시보드 사용자에게 노출되는 답변 담당이 아닙니다. 채팅 UI의
+담당 선택, 자동 배정, 제품총괄 종합 대상에는 포함하지 않습니다.
