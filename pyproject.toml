@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.2",
     "plotly>=6.0",
     "python-dotenv>=1.1",
+    "reportlab>=4.5.1",
     "streamlit>=1.45",
     "watchdog>=6.0.0",
 ]

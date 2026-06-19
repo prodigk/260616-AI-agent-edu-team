@@ -20,7 +20,6 @@ reviewing the result. User-facing copy is Korean.
   requirements.
 - `docs/Chat Feature Spec.md`: canonical chat UI, routing, OpenAI, fallback,
   product-lead aggregation, streaming, and logging requirements.
-- `square-dashboard-html/`: visual reference UI kit. Reuse its design language;
   do not introduce a separate frontend runtime unless explicitly requested.
 - `AI_커머스_운영_대시보드_기획서.docx`: detailed planning artifact.
 - `AI_커머스_운영_대시보드_발표자료.pptx`: six-slide presentation artifact.
@@ -98,7 +97,6 @@ The canonical OpenAI and fallback chat contract lives in
 ## UI Direction
 
 - Streamlit components are the default implementation surface.
-- Preserve the Square-inspired navigation, cards, spacing, and navy/teal base.
 - Use saturated key colors for high-priority values and alerts.
 - Keep the chat panel on the right side of analysis pages.
 - On desktop, keep the 250px sidebar visible. On mobile, preserve the

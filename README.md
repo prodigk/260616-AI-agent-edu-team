@@ -43,7 +43,7 @@ OPENAI_MODEL=gpt-5.4-mini
 - 판매 급등락, 품절 위험, 광고 효율, 인기상품, 추천 성과 이벤트 탐지
 - Pearson/Spearman 상관관계 히트맵과 상세 분석
 - 실행 액션 보드와 상태 관리
-- 주간 및 대표 보고서 Markdown 다운로드
+- 주간 및 대표 보고서 PDF 다운로드
 - 현재 필터와 분석 결과를 이해하는 우측 운영 분석 챗 UI
 - 질문 맥락에 따른 직무 에이전트 자동 배정, 직접 지정, 제품총괄 종합 답변
 
@@ -78,5 +78,3 @@ OPENAI_MODEL=gpt-5.4-mini
 7. Task Assignment Agent
 8. Executive Report Agent
 
-UI는 `square-dashboard-html`의 Circle Overview 화면, 색상 토큰, 카드 및
-내비게이션 패턴을 Streamlit 컴포넌트에 맞춰 재구성했습니다.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import io
+import re
 import shutil
 import time
 from html import escape
@@ -12,6 +13,21 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import (
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from src.agents import (
     ActionPlannerAgent,
@@ -459,20 +475,23 @@ def inject_square_theme() -> None:
             font-weight:800;color:#171725;
         }
         .sq-chat-header {
-            display:flex;align-items:center;justify-content:space-between;
-            padding-bottom:14px;border-bottom:1px solid #F1F1F5;margin-bottom:12px;
+            display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+            padding-bottom:12px;border-bottom:1px solid #F1F1F5;margin-bottom:10px;
         }
-        .sq-chat-title {font-size:17px;font-weight:700;}
+        .sq-chat-title {font-size:18px;font-weight:800;line-height:1.2;}
+        .sq-chat-subtitle {
+            color:#696974;font-size:11px;font-weight:600;line-height:1.35;margin-top:3px;
+        }
         .sq-status {
             display:inline-flex;align-items:center;gap:6px;padding:5px 9px;
             border-radius:99px;background:rgba(61,213,152,.11);
-            color:#15966a;font-size:11px;font-weight:700;
+            color:#15966a;font-size:10px;font-weight:800;white-space:nowrap;
         }
         .sq-status:before {content:"";width:7px;height:7px;border-radius:50%;background:#3DD598;}
-        .sq-context {
-            border-radius:10px;background:rgba(0,98,255,.055);color:#0062FF;
-            padding:8px 10px;font-size:11px;font-weight:600;margin-bottom:8px;
+        .sq-status-fallback {
+            background:rgba(255,151,74,.13);color:#B95711;
         }
+        .sq-status-fallback:before {background:#FF974A;}
         .st-key-chat_panel_shell {
             position:fixed;top:1rem;right:2rem;bottom:1rem;
             width:min(420px, calc((100vw - 250px) * .29));
@@ -493,8 +512,9 @@ def inject_square_theme() -> None:
             overflow-x:hidden !important;overflow-y:auto !important;
             overscroll-behavior:contain;scrollbar-width:thin;
             scrollbar-color:#D6D6DE transparent;
-            padding:4px 8px 10px;border-radius:14px;
-            background:#FAFAFB;border:1px solid #F1F1F5;
+            padding:7px 8px 10px;border-radius:15px;
+            background:linear-gradient(180deg,#FAFAFB 0%,#FFFFFF 100%);
+            border:1px solid #F1F1F5;
         }
         .st-key-chat_history::-webkit-scrollbar {
             width:6px;
@@ -619,7 +639,8 @@ def inject_square_theme() -> None:
         }
         div[data-testid="stChatMessage"] {
             border-radius:14px;padding:8px 10px;margin:6px 0;
-            background:#FAFAFB;border:1px solid #F1F1F5;
+            background:#fff;border:1px solid #F1F1F5;
+            box-shadow:0 4px 14px rgba(68,68,79,.025);
         }
         .sq-chat-agent-header {
             display:flex;align-items:center;gap:7px;min-height:26px;
@@ -637,12 +658,18 @@ def inject_square_theme() -> None:
             margin-top:9px;padding:8px 10px;border-radius:11px;
             background:#F7F7F8;border:1px solid #EAEAEE;
             color:#696974;font-size:11px;line-height:1.45;
+            width:100%;max-width:100%;box-sizing:border-box;
+            overflow-wrap:anywhere;word-break:keep-all;
         }
         .sq-workflow-meta strong {
             color:#44444F;font-weight:700;
         }
         .sq-answer-skeleton {
             padding:8px 0 4px;
+        }
+        .sq-chat-stream-anchor {
+            height:1px;
+            scroll-margin-bottom:12px;
         }
         .sq-skeleton-line {
             height:10px;border-radius:99px;margin:8px 0;
@@ -683,8 +710,8 @@ def inject_square_theme() -> None:
             margin-bottom:4px;color:#696974;font-size:11px;font-weight:600;
         }
         .sq-agent-mode-card {
-            border:1px solid #EAEAEE;background:#fff;border-radius:12px;
-            padding:10px 11px;margin-bottom:8px;
+            border:1px solid #EAEAEE;background:linear-gradient(180deg,#FFFFFF 0%,#FAFAFB 100%);
+            border-radius:13px;padding:10px 11px;margin-bottom:8px;
         }
         .sq-agent-mode-top {
             display:flex;align-items:center;justify-content:space-between;gap:8px;
@@ -700,6 +727,33 @@ def inject_square_theme() -> None:
         }
         .sq-agent-mode-hint {
             color:#696974;font-size:11px;line-height:1.35;margin-bottom:8px;
+        }
+        .st-key-chat_quick_questions {
+            margin:1px 0 9px;padding:9px;border-radius:13px;
+            background:#fff;border:1px solid rgba(226,226,234,.86);
+        }
+        .sq-chat-quick-head {
+            display:flex;align-items:center;justify-content:space-between;gap:8px;
+            color:#696974;font-size:10px;font-weight:800;margin-bottom:7px;
+        }
+        .sq-chat-quick-head span:last-child {
+            color:#B5B5BE;font-weight:800;
+        }
+        .st-key-chat_quick_questions [data-testid="stHorizontalBlock"] {
+            gap:.35rem;
+        }
+        [class*="st-key-suggest_"] button {
+            min-height:44px !important;border-radius:11px !important;
+            padding:8px 10px !important;font-size:11px !important;line-height:1.38 !important;
+            border-color:rgba(0,98,255,.14) !important;
+            background:#F8FAFF !important;color:#24405F !important;
+            box-shadow:none !important;
+            white-space:normal !important;text-align:left !important;
+            justify-content:flex-start !important;
+        }
+        [class*="st-key-suggest_"] button:hover {
+            border-color:rgba(0,98,255,.32) !important;
+            background:#EFF5FF !important;color:#0062FF !important;
         }
         .sq-agent-shortcuts {
             display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:8px;
@@ -750,6 +804,14 @@ def inject_square_theme() -> None:
             min-height:32px !important;padding:5px 10px !important;
             border-radius:12px !important;font-size:11px !important;
             font-weight:700 !important;
+        }
+        .st-key-chat_input_form textarea {
+            border-radius:13px !important;border-color:#E2E2EA !important;
+            background:#fff !important;font-size:13px !important;line-height:1.45 !important;
+        }
+        .st-key-chat_input_form textarea:focus {
+            border-color:rgba(0,98,255,.48) !important;
+            box-shadow:0 0 0 3px rgba(0,98,255,.09) !important;
         }
         [data-testid="stVerticalBlockBorderWrapper"] {
             background:#fff;border-color:rgba(226,226,234,.85) !important;
@@ -1693,7 +1755,7 @@ def agents_page(quality, events, correlations, insights, actions):
         ("Event Detector Agent", "판매 급등락, 품절 위험, 광고 효율 변화, 추천 성과 이벤트를 탐지합니다.", f"{len(events)}개 이벤트"),
         ("Correlation Analyzer Agent", "기간 내 주요 운영 지표 간 상관관계를 계산하고 강한 관계를 정렬합니다.", f"{len(correlations.top_pairs)}개 상위 관계"),
         ("Insight Generator Agent", "KPI, 이벤트, 상관관계를 운영자가 읽기 쉬운 핵심 인사이트로 압축합니다.", f"{len(insights)}개 인사이트"),
-        ("Weekly Report Agent", "실무자용 주간 운영 리포트를 Markdown 형식으로 생성합니다.", "운영 리포트 준비"),
+        ("Weekly Report Agent", "실무자용 주간 운영 리포트를 PDF 다운로드 문서로 생성합니다.", "운영 리포트 준비"),
         ("Action Planner Agent", "이벤트와 원인 후보를 바탕으로 담당팀별 실행 액션을 생성합니다.", f"{len(actions)}개 액션"),
         ("Task Assignment Agent", "액션을 팀과 우선순위 기준으로 정리해 실행 과제 보드에 연결합니다.", "액션 보드 연결"),
         ("Executive Report Agent", "대표/의사결정자용 요약 리포트와 결정 필요 항목을 생성합니다.", "대표 요약 준비"),
@@ -1731,6 +1793,247 @@ def agents_page(quality, events, correlations, insights, actions):
     st.dataframe(quality, width="stretch", hide_index=True)
 
 
+def register_pdf_fonts():
+    for font_name in ("HYGothic-Medium", "HYSMyeongJo-Medium"):
+        if font_name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+
+def clean_markdown_inline(text):
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    return escape(text.strip())
+
+
+def is_markdown_table_separator(line):
+    stripped = line.strip().strip("|").strip()
+    return bool(stripped) and all(char in "-:| " for char in stripped)
+
+
+def markdown_table_to_flowable(lines, styles):
+    rows = []
+    for line in lines:
+        if is_markdown_table_separator(line):
+            continue
+        cells = [clean_markdown_inline(cell) for cell in line.strip().strip("|").split("|")]
+        if cells:
+            rows.append([Paragraph(cell or " ", styles["table_cell"]) for cell in cells])
+    if not rows:
+        return None
+    table = Table(rows, repeatRows=1, hAlign="LEFT")
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F6FF")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#171725")),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#E2E2EA")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    return table
+
+
+def markdown_report_to_flowables(markdown_text, styles):
+    story = []
+    paragraph_buffer = []
+    lines = markdown_text.splitlines()
+    index = 0
+
+    def flush_paragraph():
+        if paragraph_buffer:
+            text = " ".join(part.strip() for part in paragraph_buffer if part.strip())
+            if text:
+                story.append(Paragraph(clean_markdown_inline(text), styles["body"]))
+                story.append(Spacer(1, 4))
+            paragraph_buffer.clear()
+
+    while index < len(lines):
+        line = lines[index].rstrip()
+        stripped = line.strip()
+        if not stripped:
+            flush_paragraph()
+            index += 1
+            continue
+
+        if stripped.startswith("|") and "|" in stripped[1:]:
+            flush_paragraph()
+            table_lines = []
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                table_lines.append(lines[index])
+                index += 1
+            table = markdown_table_to_flowable(table_lines, styles)
+            if table:
+                story.append(table)
+                story.append(Spacer(1, 9))
+            continue
+
+        heading_match = re.match(r"^(#{1,4})\s+(.+)$", stripped)
+        if heading_match:
+            flush_paragraph()
+            level = len(heading_match.group(1))
+            style = styles["h1"] if level == 1 else styles["h2"] if level == 2 else styles["h3"]
+            story.append(Paragraph(clean_markdown_inline(heading_match.group(2)), style))
+            story.append(Spacer(1, 6))
+            index += 1
+            continue
+
+        bullet_match = re.match(r"^[-*]\s+(.+)$", stripped)
+        numbered_match = re.match(r"^\d+\.\s+(.+)$", stripped)
+        if bullet_match or numbered_match:
+            flush_paragraph()
+            content = bullet_match.group(1) if bullet_match else numbered_match.group(1)
+            story.append(
+                Paragraph(
+                    clean_markdown_inline(content),
+                    styles["bullet"],
+                    bulletText="•",
+                )
+            )
+            index += 1
+            continue
+
+        if stripped == "---":
+            flush_paragraph()
+            story.append(Spacer(1, 8))
+            index += 1
+            continue
+
+        paragraph_buffer.append(stripped)
+        index += 1
+
+    flush_paragraph()
+    return story
+
+
+def build_report_pdf(markdown_text, title, subtitle, report_date, agent_name):
+    register_pdf_fonts()
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=16 * mm,
+        leftMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=13 * mm,
+        title=title,
+        author=agent_name,
+    )
+    base_styles = getSampleStyleSheet()
+    styles = {
+        "cover_title": ParagraphStyle(
+            "CoverTitle",
+            parent=base_styles["Title"],
+            fontName="HYGothic-Medium",
+            fontSize=24,
+            leading=30,
+            textColor=colors.HexColor("#171725"),
+            alignment=TA_CENTER,
+            spaceAfter=12,
+        ),
+        "cover_subtitle": ParagraphStyle(
+            "CoverSubtitle",
+            parent=base_styles["Normal"],
+            fontName="HYGothic-Medium",
+            fontSize=13,
+            leading=18,
+            textColor=colors.HexColor("#0062FF"),
+            alignment=TA_CENTER,
+            spaceAfter=14,
+        ),
+        "cover_meta": ParagraphStyle(
+            "CoverMeta",
+            parent=base_styles["Normal"],
+            fontName="HYSMyeongJo-Medium",
+            fontSize=10,
+            leading=15,
+            textColor=colors.HexColor("#696974"),
+            alignment=TA_CENTER,
+        ),
+        "h1": ParagraphStyle(
+            "ReportH1",
+            parent=base_styles["Heading1"],
+            fontName="HYGothic-Medium",
+            fontSize=16,
+            leading=21,
+            textColor=colors.HexColor("#171725"),
+            spaceBefore=8,
+        ),
+        "h2": ParagraphStyle(
+            "ReportH2",
+            parent=base_styles["Heading2"],
+            fontName="HYGothic-Medium",
+            fontSize=13,
+            leading=18,
+            textColor=colors.HexColor("#0062FF"),
+            spaceBefore=7,
+        ),
+        "h3": ParagraphStyle(
+            "ReportH3",
+            parent=base_styles["Heading3"],
+            fontName="HYGothic-Medium",
+            fontSize=11,
+            leading=16,
+            textColor=colors.HexColor("#44444F"),
+            spaceBefore=5,
+        ),
+        "body": ParagraphStyle(
+            "ReportBody",
+            parent=base_styles["BodyText"],
+            fontName="HYSMyeongJo-Medium",
+            fontSize=9,
+            leading=14,
+            textColor=colors.HexColor("#2F2F31"),
+        ),
+        "bullet": ParagraphStyle(
+            "ReportBullet",
+            parent=base_styles["BodyText"],
+            fontName="HYSMyeongJo-Medium",
+            fontSize=9,
+            leading=14,
+            leftIndent=12,
+            bulletIndent=2,
+            textColor=colors.HexColor("#2F2F31"),
+        ),
+        "table_cell": ParagraphStyle(
+            "ReportTableCell",
+            parent=base_styles["BodyText"],
+            fontName="HYSMyeongJo-Medium",
+            fontSize=7.5,
+            leading=10,
+            textColor=colors.HexColor("#2F2F31"),
+        ),
+    }
+
+    story = [
+        Spacer(1, 40 * mm),
+        Paragraph(clean_markdown_inline(title), styles["cover_title"]),
+        Paragraph(clean_markdown_inline(subtitle), styles["cover_subtitle"]),
+        Paragraph("AI 커머스 운영 대시보드 분석 결과를 기반으로 생성한 PDF 리포트입니다.", styles["cover_meta"]),
+        Spacer(1, 7 * mm),
+        Paragraph(f"작성일자: {report_date:%Y.%m.%d}", styles["cover_meta"]),
+        Paragraph(f"작성 Agent: {escape(agent_name)}", styles["cover_meta"]),
+        PageBreak(),
+    ]
+    story.extend(markdown_report_to_flowables(markdown_text, styles))
+
+    def add_page_footer(canvas, document):
+        canvas.saveState()
+        canvas.setFont("HYSMyeongJo-Medium", 8)
+        canvas.setFillColor(colors.HexColor("#92929D"))
+        canvas.drawString(16 * mm, 8 * mm, "AI Commerce Operations Dashboard")
+        canvas.drawRightString(landscape(A4)[0] - 16 * mm, 8 * mm, f"{document.page}")
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=add_page_footer, onLaterPages=add_page_footer)
+    return buffer.getvalue()
+
+
 def reports_page(kpis, events, correlations, insights, actions, cause_candidates, start, end):
     weekly = WeeklyReportAgent().run(
         kpis, events, correlations, insights, start, end, cause_candidates
@@ -1742,10 +2045,16 @@ def reports_page(kpis, events, correlations, insights, actions, cause_candidates
     with tab1:
         st.markdown(weekly)
         st.download_button(
-            "실무자 운영 리포트 다운로드",
-            weekly,
-            file_name=f"weekly_report_{end:%Y%m%d}.md",
-            mime="text/markdown",
+            "실무자 운영 리포트 PDF 다운로드",
+            build_report_pdf(
+                weekly,
+                "실무자 운영 리포트",
+                f"{start:%Y.%m.%d} - {end:%Y.%m.%d} 운영 현황 요약",
+                end,
+                "Weekly Report Agent",
+            ),
+            file_name=f"weekly_report_{end:%Y%m%d}.pdf",
+            mime="application/pdf",
             type="primary",
         )
     with tab3:
@@ -1766,20 +2075,33 @@ def reports_page(kpis, events, correlations, insights, actions, cause_candidates
             st.warning("OpenAI 리포트 다듬기에 실패해 기본 리포트를 표시합니다.")
             with st.expander("오류 상세"):
                 st.caption(st.session_state["polished_report_error"])
-        st.markdown(st.session_state.get("polished_report", base_report))
+        narrative_report = st.session_state.get("polished_report", base_report)
+        st.markdown(narrative_report)
         st.download_button(
-            "AI 내러티브 리포트 다운로드",
-            st.session_state.get("polished_report", base_report),
-            file_name=f"narrative_report_{end:%Y%m%d}.md",
-            mime="text/markdown",
+            "AI 내러티브 리포트 PDF 다운로드",
+            build_report_pdf(
+                narrative_report,
+                "AI 내러티브 리포트",
+                f"{start:%Y.%m.%d} - {end:%Y.%m.%d} 통합 분석 내러티브",
+                end,
+                "OpenAI Narrative Agent",
+            ),
+            file_name=f"narrative_report_{end:%Y%m%d}.pdf",
+            mime="application/pdf",
         )
     with tab2:
         st.markdown(executive)
         st.download_button(
-            "대표 보고서 다운로드",
-            executive,
-            file_name=f"executive_report_{end:%Y%m%d}.md",
-            mime="text/markdown",
+            "대표 보고서 PDF 다운로드",
+            build_report_pdf(
+                executive,
+                "대표 요약 리포트",
+                "의사결정이 필요한 핵심 이슈와 승인 항목",
+                end,
+                "Executive Report Agent",
+            ),
+            file_name=f"executive_report_{end:%Y%m%d}.pdf",
+            mime="application/pdf",
             type="primary",
         )
 
@@ -1948,6 +2270,30 @@ def render_target_chips(labels):
     )
 
 
+def chat_suggestions():
+    return [
+        "최근 발생한 품절상품이 매출과 고객 만족도 영향 평가",
+        "이번 주 판매 급상승 상품과 광고비 변동의 상관관계 분석",
+    ]
+
+
+def render_quick_questions(suggestions):
+    with st.container(key="chat_quick_questions"):
+        st.markdown(
+            """
+            <div class="sq-chat-quick-head">
+              <span>빠른 질문</span><span>현재 필터 기준</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        for idx, suggestion in enumerate(suggestions):
+            if st.button(suggestion, key=f"suggest_{idx}", width="stretch"):
+                requested_agents = st.session_state.get("chat_requested_agents", [])
+                queue_chat_question(suggestion, get_answer_targets(requested_agents))
+                st.rerun()
+
+
 def queue_chat_question(question, target_agents):
     target_agents = target_agents or [AUTO_AGENT]
     workflow = select_workflow_pattern(question, target_agents)
@@ -2114,6 +2460,10 @@ def render_streaming_chat_answer(
         render_assistant_header(assignment.agent.label, assignment.mode)
         placeholder = st.empty()
         render_answer_skeleton(placeholder)
+        st.markdown(
+            '<div class="sq-chat-stream-anchor" aria-hidden="true"></div>',
+            unsafe_allow_html=True,
+        )
         try:
             if is_openai_configured():
                 context = build_dashboard_context(
@@ -2159,7 +2509,7 @@ def render_streaming_chat_answer(
             for chunk_index, chunk in enumerate(chunks):
                 collected += chunk
                 placeholder.markdown(collected + "▌")
-                if chunk_index == 0 or chunk_index % 4 == 0:
+                if chunk_index == 0 or chunk_index % 8 == 0:
                     scroll_chat_to_bottom()
             if not collected.strip():
                 raise RuntimeError("답변 텍스트가 비어 있습니다.")
@@ -2182,7 +2532,7 @@ def render_streaming_chat_answer(
             for chunk_index, chunk in enumerate(stream_text_chunks(fallback)):
                 collected += chunk
                 placeholder.markdown(collected + "▌")
-                if chunk_index == 0 or chunk_index % 4 == 0:
+                if chunk_index == 0 or chunk_index % 8 == 0:
                     scroll_chat_to_bottom()
 
         placeholder.markdown(collected)
@@ -2191,20 +2541,30 @@ def render_streaming_chat_answer(
         render_workflow_meta(workflow.workflow_type, workflow.reason)
         if source:
             st.caption(source)
+        scroll_chat_to_bottom(behavior="smooth")
     return collected, source, error, assignment
 
 
-def scroll_chat_to_bottom():
+def scroll_chat_to_bottom(behavior="smooth"):
+    behavior = "smooth" if behavior == "smooth" else "auto"
     st.iframe(
         """
         <script>
         const doc = window.parent.document;
         const history = doc.querySelector('.st-key-chat_history');
         if (history) {
-          requestAnimationFrame(() => { history.scrollTop = history.scrollHeight; });
+          const anchor = history.querySelector('.sq-chat-stream-anchor:last-of-type');
+          const target = anchor || history.lastElementChild;
+          requestAnimationFrame(() => {
+            if (target && target.scrollIntoView) {
+              target.scrollIntoView({ block: 'end', behavior: '__BEHAVIOR__' });
+            } else {
+              history.scrollTo({ top: history.scrollHeight, behavior: '__BEHAVIOR__' });
+            }
+          });
         }
         </script>
-        """,
+        """.replace("__BEHAVIOR__", behavior),
         height=1,
     )
 
@@ -2214,6 +2574,7 @@ def render_chat_panel(kpis, events, correlations, actions, cause_candidates, sta
     status_label = (
         f"OpenAI · {configured_model()}" if openai_ready else "규칙 기반"
     )
+    status_class = "sq-status" if openai_ready else "sq-status sq-status-fallback"
     with st.container(border=True, key="chat_panel_shell"):
         st.markdown(
             f"""
@@ -2221,14 +2582,11 @@ def render_chat_panel(kpis, events, correlations, actions, cause_candidates, sta
               <div>
                 <div class="sq-eyebrow">DASHBOARD COPILOT</div>
                 <div class="sq-chat-title">운영 분석 AI</div>
+                <div class="sq-chat-subtitle">현재 화면의 KPI·이벤트·액션을 기준으로 답합니다.</div>
               </div>
-              <span class="sq-status">{status_label}</span>
+              <span class="{status_class}">{status_label}</span>
             </div>
             """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f'<div class="sq-context">현재 분석 맥락 · {start:%m.%d}–{end:%m.%d} · 이벤트 {len(events)}건 · 액션 {len(actions)}건</div>',
             unsafe_allow_html=True,
         )
         if "chat_messages" not in st.session_state:
@@ -2236,8 +2594,7 @@ def render_chat_panel(kpis, events, correlations, actions, cause_candidates, sta
                 {
                     "role": "assistant",
                     "content": (
-                        "질문 맥락에 맞는 직무 담당을 자동 배정해 현재 대시보드 데이터로 "
-                        "답변합니다. 필요하면 아래 담당 칩을 하나 이상 선택해 직접 질문하세요."
+                        "현재 필터와 분석 결과를 기준으로 운영 판단에 필요한 답변을 준비해두었습니다."
                     ),
                     "agent": "AI 운영 코디네이터",
                 }
@@ -2249,18 +2606,7 @@ def render_chat_panel(kpis, events, correlations, actions, cause_candidates, sta
             border=False,
             autoscroll=True,
         ):
-            st.caption("빠른 질문")
-            suggestions = [
-                "품절 위험 상품 알려줘",
-                "판매 급증의 원인은?",
-            ]
-            for idx, suggestion in enumerate(suggestions):
-                if st.button(suggestion, key=f"suggest_{idx}", width="stretch"):
-                    requested_agents = st.session_state.get(
-                        "chat_requested_agents", []
-                    )
-                    queue_chat_question(suggestion, get_answer_targets(requested_agents))
-                    st.rerun()
+            render_quick_questions(chat_suggestions())
 
             for message in st.session_state.chat_messages:
                 render_chat_message(message)
@@ -2409,17 +2755,22 @@ def render_chat_panel(kpis, events, correlations, actions, cause_candidates, sta
                     width="stretch",
                 )
 
-        with st.form("chat_form", clear_on_submit=True, border=False):
-            prompt = st.text_area(
-                "질문",
-                placeholder="예: 판매 급증의 원인과 필요한 액션은?",
-                label_visibility="collapsed",
-                height=88,
-            )
-            submitted = st.form_submit_button(
-                "질문 보내기", type="primary", width="stretch"
-            )
+        with st.container(key="chat_input_form"):
+            with st.form("chat_form", clear_on_submit=True, border=False):
+                prompt = st.text_area(
+                    "질문",
+                    placeholder="예: 판매 급증의 원인과 오늘 필요한 액션은?",
+                    label_visibility="collapsed",
+                    height=86,
+                )
+                submitted = st.form_submit_button(
+                    "질문 보내기",
+                    type="primary",
+                    icon=":material/send:",
+                    width="stretch",
+                )
         if submitted and prompt.strip():
+            requested_agents = st.session_state.get("chat_requested_agents", [])
             queue_chat_question(prompt, get_answer_targets(requested_agents))
             st.rerun()
 

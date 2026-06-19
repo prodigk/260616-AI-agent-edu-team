@@ -27,7 +27,6 @@ Read `AGENTS.md`, `README.md`, and `docs/AGENTS.md` before continuing.
 ## Important Code Locations
 
 - `dashboard.py`
-  - Square/sidebar/chat CSS: near `inject_square_theme`
   - chat answer orchestration: `get_chat_answer`
   - stored chat metadata: `append_chat_exchange`
   - fixed chat layout: `render_chat_panel`
